@@ -1,0 +1,23 @@
+{
+  "name": "قرمزي برو - Krmzi Pro",
+  "short_name": "Krmzi Pro",
+  "description": "تطبيق مشاهدة المسلسلات التركية بدون إعلانات وبجودة فائقة",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0c0d14",
+  "theme_color": "#0c0d14",
+  "dir": "rtl",
+  "lang": "ar",
+  "icons": [
+    {
+      "src": "https://krmzi.org/wp-content/uploads/2026/02/cropped-faviconkrmzi-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://krmzi.org/wp-content/uploads/2026/02/cropped-faviconkrmzi-270x270.png",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}
