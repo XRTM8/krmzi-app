@@ -128,6 +128,23 @@
           </div>
         </div>
         <div class="media-grid" id="libraryGrid"></div>
+
+        <!-- App Info & System Update Card -->
+        <div class="app-version-card" id="appVersionCard">
+          <div class="version-meta">
+            <div class="version-icon-box">
+              <i class="fa-solid fa-code-branch"></i>
+            </div>
+            <div class="version-text">
+              <span class="v-label">إصدار التطبيق</span>
+              <span class="v-val" id="installedVersionText">v1.0.4</span>
+            </div>
+          </div>
+          <button class="check-update-btn" id="manualCheckUpdateBtn">
+            <i class="fa-solid fa-arrows-rotate" id="checkUpdateIcon"></i>
+            <span id="checkUpdateBtnText">التحقق من التحديثات</span>
+          </button>
+        </div>
       </section>
 
     </main>
@@ -295,6 +312,30 @@
           <button class="sheet-x-btn" id="closeSheetBtn"><i class="fa-solid fa-xmark"></i></button>
         </div>
         <div class="sheet-content" id="sheetBody"></div>
+      </div>
+    </div>
+
+    <!-- In-App Update Modal Sheet -->
+    <div class="sheet-scrim hidden" id="updateModalScrim">
+      <div class="sheet-panel update-panel" id="updateSheet">
+        <div class="sheet-grabber"></div>
+        <div class="update-sheet-body">
+          <div class="update-icon-glow">
+            <i class="fa-solid fa-cloud-arrow-down"></i>
+          </div>
+          <h3 id="updateModalTitle">تحديث جديد متوفر!</h3>
+          <span class="update-tag" id="updateModalVersion">الإصدار v1.0.4</span>
+          <div class="changelog-container" id="updateChangelog"></div>
+          <div class="update-actions">
+            <button class="update-primary-btn" id="confirmUpdateBtn">
+              <i class="fa-solid fa-download"></i>
+              <span>تحديث الآن (تحميل APK)</span>
+            </button>
+            <button class="update-later-btn" id="dismissUpdateBtn">
+              <span>تذكيري لاحقاً</span>
+            </button>
+          </div>
+        </div>
       </div>
     </div>
 

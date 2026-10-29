@@ -2,6 +2,7 @@ package com.krmzi.app
 
 import android.annotation.SuppressLint
 import android.app.PictureInPictureParams
+import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
@@ -21,6 +22,9 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.webkit.WebViewAssetLoader
+import java.net.HttpURLConnection
+import java.net.URL
+import org.json.JSONObject
 
 class MainActivity : AppCompatActivity() {
 
@@ -83,6 +87,119 @@ class MainActivity : AppCompatActivity() {
 
         @JavascriptInterface
         fun isNative(): Boolean = true
+
+        @JavascriptInterface
+        fun getAppVersion(): String {
+            return try {
+                val pInfo = packageManager.getPackageInfo(packageName, 0)
+                val vName = pInfo.versionName ?: "1.0.3"
+                val vCode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+                    pInfo.longVersionCode
+                } else {
+                    @Suppress("DEPRECATION")
+                    pInfo.versionCode.toLong()
+                }
+                JSONObject().apply {
+                    put("versionName", vName)
+                    put("versionCode", vCode)
+                }.toString()
+            } catch (e: Exception) {
+                """{"versionName":"1.0.3","versionCode":4}"""
+            }
+        }
+
+        @JavascriptInterface
+        fun checkForUpdates(): String {
+            return try {
+                val url = URL("https://api.github.com/repos/XRTM8/krmzi-app/releases/latest")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    connectTimeout = 8000
+                    readTimeout = 8000
+                    setRequestProperty("User-Agent", "KrmziApp-Android")
+                    setRequestProperty("Accept", "application/vnd.github.v3+json")
+                }
+                val code = conn.responseCode
+                if (code == 200) {
+                    val body = conn.inputStream.bufferedReader().use { it.readText() }
+                    val json = JSONObject(body)
+                    val tagName = json.optString("tag_name", "").replace("v", "").trim()
+                    val releaseName = json.optString("name", "تحديث جديد")
+                    val releaseNotes = json.optString("body", "")
+
+                    var apkUrl = ""
+                    val assets = json.optJSONArray("assets")
+                    if (assets != null && assets.length() > 0) {
+                        for (i in 0 until assets.length()) {
+                            val asset = assets.getJSONObject(i)
+                            val name = asset.optString("name", "")
+                            if (name.endsWith(".apk", ignoreCase = true)) {
+                                apkUrl = asset.optString("browser_download_url", "")
+                                break
+                            }
+                        }
+                    }
+                    if (apkUrl.isEmpty()) {
+                        apkUrl = json.optString("html_url", "https://github.com/XRTM8/krmzi-app/releases/latest")
+                    }
+
+                    val pInfo = packageManager.getPackageInfo(packageName, 0)
+                    val currentVersion = (pInfo.versionName ?: "1.0.3").replace("v", "").trim()
+
+                    val hasUpdate = isNewerVersion(currentVersion, tagName)
+
+                    JSONObject().apply {
+                        put("hasUpdate", hasUpdate)
+                        put("currentVersion", currentVersion)
+                        put("latestVersion", tagName)
+                        put("releaseName", releaseName)
+                        put("changelog", releaseNotes)
+                        put("downloadUrl", apkUrl)
+                        put("isSuccess", true)
+                    }.toString()
+                } else {
+                    JSONObject().apply {
+                        put("hasUpdate", false)
+                        put("error", "HTTP $code")
+                        put("isSuccess", false)
+                    }.toString()
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Update check error: ${e.message}")
+                JSONObject().apply {
+                    put("hasUpdate", false)
+                    put("error", e.message)
+                    put("isSuccess", false)
+                }.toString()
+            }
+        }
+
+        @JavascriptInterface
+        fun openDownloadUrl(downloadUrl: String) {
+            runOnUiThread {
+                try {
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(downloadUrl)).apply {
+                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    }
+                    startActivity(intent)
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to launch download URL: ${e.message}")
+                }
+            }
+        }
+    }
+
+    private fun isNewerVersion(current: String, latest: String): Boolean {
+        if (latest.isEmpty()) return false
+        val currParts = current.split(".").mapNotNull { it.toIntOrNull() }
+        val lateParts = latest.split(".").mapNotNull { it.toIntOrNull() }
+        val maxLen = maxOf(currParts.size, lateParts.size)
+        for (i in 0 until maxLen) {
+            val c = currParts.getOrElse(i) { 0 }
+            val l = lateParts.getOrElse(i) { 0 }
+            if (l > c) return true
+            if (l < c) return false
+        }
+        return false
     }
 
     @SuppressLint("SetJavaScriptEnabled")

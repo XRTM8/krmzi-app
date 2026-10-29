@@ -20,7 +20,9 @@ const state = {
   preferredQuality: localStorage.getItem('krmzi_pref_quality') || '1080p (Full HD)',
   hudTimeout: null,
   autoNextTimerId: null,
-  autoNextCancelled: false
+  autoNextCancelled: false,
+  currentVersion: '1.0.4',
+  pendingUpdate: null
 };
 
 // DOM References
@@ -130,6 +132,21 @@ const closeSheetBtn = document.getElementById('closeSheetBtn');
 const offlineState = document.getElementById('offlineState');
 const retryBtn = document.getElementById('retryBtn');
 
+// In-App Updates System
+const appVersionCard = document.getElementById('appVersionCard');
+const installedVersionText = document.getElementById('installedVersionText');
+const manualCheckUpdateBtn = document.getElementById('manualCheckUpdateBtn');
+const checkUpdateIcon = document.getElementById('checkUpdateIcon');
+const checkUpdateBtnText = document.getElementById('checkUpdateBtnText');
+
+const updateModalScrim = document.getElementById('updateModalScrim');
+const updateSheet = document.getElementById('updateSheet');
+const updateModalTitle = document.getElementById('updateModalTitle');
+const updateModalVersion = document.getElementById('updateModalVersion');
+const updateChangelog = document.getElementById('updateChangelog');
+const confirmUpdateBtn = document.getElementById('confirmUpdateBtn');
+const dismissUpdateBtn = document.getElementById('dismissUpdateBtn');
+
 // Centralized Native-First API Call
 async function apiCall(endpoint, params = {}) {
   // 1. Android Native Bridge (Zero CORS, zero network handshake, direct Kotlin speed)
@@ -190,6 +207,7 @@ document.addEventListener('DOMContentLoaded', () => {
   setupSearch();
   setupPlayerTouch();
   setupBottomSheet();
+  setupUpdateSystem();
   if (retryBtn) {
     retryBtn.addEventListener('click', () => {
       haptic();
@@ -1343,4 +1361,172 @@ function formatTime(secs) {
   const m = Math.floor(secs / 60);
   const s = Math.floor(secs % 60);
   return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
+// ==================== In-App Updates System ====================
+function isNewerVersion(current, latest) {
+  if (!latest) return false;
+  const cParts = current.replace(/^v/, '').split('.').map(n => parseInt(n) || 0);
+  const lParts = latest.replace(/^v/, '').split('.').map(n => parseInt(n) || 0);
+  const max = Math.max(cParts.length, lParts.length);
+  for (let i = 0; i < max; i++) {
+    const c = cParts[i] || 0;
+    const l = lParts[i] || 0;
+    if (l > c) return true;
+    if (l < c) return false;
+  }
+  return false;
+}
+
+async function checkForUpdates(isManual = false) {
+  if (isManual) {
+    if (checkUpdateIcon) checkUpdateIcon.classList.add('fa-spin');
+    if (checkUpdateBtnText) checkUpdateBtnText.textContent = 'جاري التحقق...';
+    if (manualCheckUpdateBtn) manualCheckUpdateBtn.disabled = true;
+  }
+
+  let updateInfo = null;
+
+  try {
+    if (window.KrmziBridge && window.KrmziBridge.checkForUpdates) {
+      const raw = window.KrmziBridge.checkForUpdates();
+      if (raw) {
+        updateInfo = JSON.parse(raw);
+      }
+    } else {
+      // Direct Web Fetch from GitHub API
+      const res = await fetch('https://api.github.com/repos/XRTM8/krmzi-app/releases/latest');
+      if (res.ok) {
+        const json = await res.json();
+        const tag = (json.tag_name || '').replace(/^v/, '');
+        const hasUpdate = isNewerVersion(state.currentVersion, tag);
+        let apkUrl = '';
+        if (json.assets && json.assets.length > 0) {
+          const apkAsset = json.assets.find(a => a.name && a.name.endsWith('.apk'));
+          if (apkAsset) apkUrl = apkAsset.browser_download_url;
+        }
+        if (!apkUrl) apkUrl = json.html_url || 'https://github.com/XRTM8/krmzi-app/releases/latest';
+
+        updateInfo = {
+          hasUpdate,
+          currentVersion: state.currentVersion,
+          latestVersion: tag,
+          releaseName: json.name || 'تحديث جديد',
+          changelog: json.body || '',
+          downloadUrl: apkUrl,
+          isSuccess: true
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Update check error:', err);
+  }
+
+  if (isManual) {
+    if (checkUpdateIcon) checkUpdateIcon.classList.remove('fa-spin');
+    if (manualCheckUpdateBtn) manualCheckUpdateBtn.disabled = false;
+  }
+
+  if (updateInfo && updateInfo.hasUpdate) {
+    if (isManual) {
+      if (checkUpdateBtnText) checkUpdateBtnText.textContent = 'التحقق من التحديثات';
+      openUpdateModal(updateInfo);
+    } else {
+      // Auto-check: verify it hasn't been dismissed within the last 24 hours
+      const lastDismissed = parseInt(localStorage.getItem('krmzi_update_dismissed') || '0');
+      const now = Date.now();
+      if (now - lastDismissed > 24 * 60 * 60 * 1000) {
+        openUpdateModal(updateInfo);
+      }
+    }
+  } else {
+    if (isManual) {
+      if (manualCheckUpdateBtn) manualCheckUpdateBtn.classList.add('success');
+      if (checkUpdateIcon) checkUpdateIcon.className = 'fa-solid fa-check';
+      if (checkUpdateBtnText) checkUpdateBtnText.textContent = `أنت على أحدث إصدار (v${state.currentVersion}) ✓`;
+      haptic('double');
+
+      setTimeout(() => {
+        if (manualCheckUpdateBtn) manualCheckUpdateBtn.classList.remove('success');
+        if (checkUpdateIcon) checkUpdateIcon.className = 'fa-solid fa-arrows-rotate';
+        if (checkUpdateBtnText) checkUpdateBtnText.textContent = 'التحقق من التحديثات';
+      }, 3500);
+    }
+  }
+}
+
+function openUpdateModal(info) {
+  state.pendingUpdate = info;
+  if (updateModalTitle) updateModalTitle.textContent = info.releaseName || 'تحديث جديد متوفر!';
+  if (updateModalVersion) updateModalVersion.textContent = 'الإصدار v' + info.latestVersion;
+  
+  if (updateChangelog) {
+    let notes = info.changelog || 'تحسينات عامة في الأداء وثبات التطبيق وإصلاحات لمشغل الفيديو.';
+    notes = notes.replace(/#{1,6}\s+/g, '').trim();
+    updateChangelog.textContent = notes;
+  }
+
+  if (updateModalScrim) updateModalScrim.classList.remove('hidden');
+  haptic('double');
+}
+
+function closeUpdateModal() {
+  if (updateModalScrim) updateModalScrim.classList.add('hidden');
+  localStorage.setItem('krmzi_update_dismissed', Date.now().toString());
+}
+
+function setupUpdateSystem() {
+  if (window.KrmziBridge && window.KrmziBridge.getAppVersion) {
+    try {
+      const vData = JSON.parse(window.KrmziBridge.getAppVersion());
+      if (vData && vData.versionName) {
+        state.currentVersion = vData.versionName.replace(/^v/, '');
+      }
+    } catch (e) {}
+  }
+
+  if (installedVersionText) {
+    installedVersionText.textContent = `v${state.currentVersion}`;
+  }
+
+  if (manualCheckUpdateBtn) {
+    manualCheckUpdateBtn.addEventListener('click', () => {
+      haptic();
+      checkForUpdates(true);
+    });
+  }
+
+  if (confirmUpdateBtn) {
+    confirmUpdateBtn.addEventListener('click', () => {
+      haptic('heavy');
+      if (state.pendingUpdate && state.pendingUpdate.downloadUrl) {
+        if (window.KrmziBridge && window.KrmziBridge.openDownloadUrl) {
+          window.KrmziBridge.openDownloadUrl(state.pendingUpdate.downloadUrl);
+        } else {
+          window.open(state.pendingUpdate.downloadUrl, '_blank');
+        }
+      }
+      closeUpdateModal();
+    });
+  }
+
+  if (dismissUpdateBtn) {
+    dismissUpdateBtn.addEventListener('click', () => {
+      haptic();
+      closeUpdateModal();
+    });
+  }
+
+  if (updateModalScrim) {
+    updateModalScrim.addEventListener('click', (e) => {
+      if (e.target === updateModalScrim) {
+        closeUpdateModal();
+      }
+    });
+  }
+
+  // Silent automatic check 3.5 seconds after launch
+  setTimeout(() => {
+    checkForUpdates(false);
+  }, 3500);
 }
