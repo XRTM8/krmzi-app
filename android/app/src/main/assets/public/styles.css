@@ -1288,3 +1288,68 @@ html, body {
   opacity: 0 !important;
   pointer-events: none !important;
 }
+
+/* ==================== Offline & Error Card ==================== */
+.offline-card {
+  margin: 16px 20px;
+  padding: 24px 20px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 18px;
+  text-align: center;
+  backdrop-filter: blur(16px);
+  animation: fadeIn 0.3s ease;
+}
+
+.offline-icon {
+  width: 54px;
+  height: 54px;
+  margin: 0 auto 12px;
+  border-radius: 50%;
+  background: rgba(229, 9, 20, 0.12);
+  color: #ff4757;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 22px;
+}
+
+.offline-card h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: #fff;
+  margin-bottom: 6px;
+}
+
+.offline-card p {
+  font-size: 13px;
+  color: #8b92a5;
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.btn-retry {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 22px;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.btn-retry:active {
+  transform: scale(0.96);
+  background: #c00812;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}

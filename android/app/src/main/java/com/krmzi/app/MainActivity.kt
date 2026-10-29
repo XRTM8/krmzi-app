@@ -2,49 +2,154 @@ package com.krmzi.app
 
 import android.annotation.SuppressLint
 import android.app.PictureInPictureParams
+import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Color
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import android.util.Rational
 import android.view.View
-import android.view.WindowInsets
-import android.view.WindowInsetsController
+import android.view.ViewGroup
+import android.view.WindowManager
 import android.webkit.*
+import android.widget.FrameLayout
 import androidx.activity.OnBackPressedCallback
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
+import androidx.webkit.WebViewAssetLoader
 
 class MainActivity : AppCompatActivity() {
 
+    private companion object {
+        const val TAG = "KrmziMainActivity"
+    }
+
     private lateinit var webView: WebView
+    private lateinit var container: FrameLayout
+    private var customView: View? = null
+    private var customViewCallback: WebChromeClient.CustomViewCallback? = null
+    private var isVideoPlaying = false
+
+    // Javascript Interface Bridge for direct, zero-CORS communication
+    inner class KrmziBridge {
+        @JavascriptInterface
+        fun getEpisodes(page: Int): String {
+            return KrmziScraper.getEpisodes(page)
+        }
+
+        @JavascriptInterface
+        fun getSeries(page: Int): String {
+            return KrmziScraper.getSeries(page)
+        }
+
+        @JavascriptInterface
+        fun getSeriesDetail(url: String): String {
+            return KrmziScraper.getSeriesDetail(url)
+        }
+
+        @JavascriptInterface
+        fun getEpisodeDetail(url: String): String {
+            return KrmziScraper.getEpisodeDetail(url)
+        }
+
+        @JavascriptInterface
+        fun search(query: String): String {
+            return KrmziScraper.getSearch(query)
+        }
+
+        @JavascriptInterface
+        fun setVideoPlaying(playing: Boolean) {
+            isVideoPlaying = playing
+        }
+
+        @JavascriptInterface
+        fun setLandscape(enable: Boolean) {
+            runOnUiThread {
+                try {
+                    requestedOrientation = if (enable) {
+                        ActivityInfo.SCREEN_ORIENTATION_SENSOR_LANDSCAPE
+                    } else {
+                        ActivityInfo.SCREEN_ORIENTATION_USER_PORTRAIT
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Orientation error: ${e.message}")
+                }
+            }
+        }
+
+        @JavascriptInterface
+        fun isNative(): Boolean = true
+    }
 
     @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Edge-to-edge immersive styling
-        window.statusBarColor = Color.BLACK
-        window.navigationBarColor = Color.BLACK
-        hideSystemUI()
+        // Make window edge-to-edge
+        try {
+            WindowCompat.setDecorFitsSystemWindows(window, false)
+            window.statusBarColor = Color.TRANSPARENT
+            window.navigationBarColor = Color.BLACK
+            window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+        } catch (_: Exception) {}
 
-        webView = WebView(this)
-        setContentView(webView)
+        container = FrameLayout(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.parseColor("#060709"))
+        }
 
-        webView.setBackgroundColor(Color.parseColor("#060709"))
+        webView = WebView(this).apply {
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+            )
+            setBackgroundColor(Color.parseColor("#060709"))
+            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+        }
 
+        container.addView(webView)
+        setContentView(container)
+
+        // Modern Google WebView Asset Loader for secure HTTPS assets
+        val assetLoader = WebViewAssetLoader.Builder()
+            .setDomain("appassets.androidplatform.net")
+            .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(this))
+            .build()
+
+        configureWebView(assetLoader)
+        setupBackHandler()
+
+        // Load application through official Android HTTPS asset loader
+        webView.loadUrl("https://appassets.androidplatform.net/assets/public/index.html")
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun configureWebView(assetLoader: WebViewAssetLoader) {
         val settings = webView.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
         settings.databaseEnabled = true
         settings.allowFileAccess = true
         settings.allowContentAccess = true
-        settings.allowFileAccessFromFileURLs = true
-        settings.allowUniversalAccessFromFileURLs = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.setSupportMultipleWindows(false)
         settings.javaScriptCanOpenWindowsAutomatically = false
         settings.cacheMode = WebSettings.LOAD_DEFAULT
+        settings.useWideViewPort = true
+        settings.loadWithOverviewMode = true
+        settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
 
+        // Register Native JavaScript Bridge
+        webView.addJavascriptInterface(KrmziBridge(), "KrmziBridge")
+
+        // Configure Chrome Client
         webView.webChromeClient = object : WebChromeClient() {
             override fun onCreateWindow(
                 view: WebView?,
@@ -52,36 +157,78 @@ class MainActivity : AppCompatActivity() {
                 isUserGesture: Boolean,
                 resultMsg: android.os.Message?
             ): Boolean {
-                // Strictly block any external popup window from ads
+                // Strictly block external popups from third-party ad networks
                 return false
+            }
+
+            override fun onShowCustomView(view: View?, callback: CustomViewCallback?) {
+                if (customView != null) {
+                    callback?.onCustomViewHidden()
+                    return
+                }
+                customView = view
+                customViewCallback = callback
+                webView.visibility = View.GONE
+                container.addView(view)
+                hideSystemBars(true)
+            }
+
+            override fun onHideCustomView() {
+                if (customView == null) return
+                webView.visibility = View.VISIBLE
+                container.removeView(customView)
+                customView = null
+                customViewCallback?.onCustomViewHidden()
+                hideSystemBars(false)
             }
         }
 
+        // Configure WebViewClient with Asset Loader & CORS-enabled Scraper interception
         webView.webViewClient = object : WebViewClient() {
             override fun shouldInterceptRequest(
                 view: WebView?,
                 request: WebResourceRequest?
             ): WebResourceResponse? {
-                val url = request?.url ?: return null
-                val path = url.path ?: ""
+                val reqUri = request?.url ?: return null
+                val path = reqUri.path ?: ""
 
-                // Intercept any local or relative /api/ requests and serve from native Kotlin Scraper!
+                // 1. Intercept relative or absolute /api/ requests
                 if (path.contains("/api/")) {
                     return try {
-                        val json = KrmziScraper.handle(url.toString())
+                        val json = KrmziScraper.handle(reqUri.toString())
+                        val headers = mutableMapOf(
+                            "Access-Control-Allow-Origin" to "*",
+                            "Access-Control-Allow-Methods" to "GET, POST, OPTIONS",
+                            "Access-Control-Allow-Headers" to "*",
+                            "Cache-Control" to "no-cache"
+                        )
                         WebResourceResponse(
                             "application/json",
                             "UTF-8",
+                            200,
+                            "OK",
+                            headers,
                             json.byteInputStream(Charsets.UTF_8)
                         )
                     } catch (e: Exception) {
+                        Log.e(TAG, "Scraper interception error: ${e.message}")
                         WebResourceResponse(
                             "application/json",
                             "UTF-8",
+                            500,
+                            "Internal Error",
+                            mapOf("Access-Control-Allow-Origin" to "*"),
                             """{"error":"${e.message}"}""".byteInputStream(Charsets.UTF_8)
                         )
                     }
                 }
+
+                // 2. Delegate to AndroidX Asset Loader
+                val assetResponse = assetLoader.shouldInterceptRequest(reqUri)
+                if (assetResponse != null) {
+                    return assetResponse
+                }
+
                 return super.shouldInterceptRequest(view, request)
             }
 
@@ -90,32 +237,68 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): Boolean {
                 val url = request?.url?.toString() ?: ""
-                // Keep file and internal navigation inside WebView, ignore external ad redirects
-                if (url.startsWith("file://") || url.contains("krmzi.org") || url.contains("ok.ru") || url.contains("arabhd")) {
+                
+                // Allow subframes, video tags, or whitelisted streaming origins
+                if (url.startsWith("https://appassets.androidplatform.net") ||
+                    url.startsWith("file://") ||
+                    url.contains("krmzi.org") ||
+                    url.contains("ok.ru") ||
+                    url.contains("mycdn.me") ||
+                    url.contains("vkusercontent.com") ||
+                    url.contains("arabhd") ||
+                    url.contains("arabveturk") ||
+                    url.contains("iplayerhls") ||
+                    url.contains("dailymotion") ||
+                    url.contains("youtube")
+                ) {
                     return false
                 }
-                return true
+
+                // If it's a top-level page navigation to an unknown domain (external ad popup), block it
+                if (request?.isForMainFrame == true) {
+                    Log.d(TAG, "Blocked external navigation to: $url")
+                    return true
+                }
+
+                return false
+            }
+
+            override fun onReceivedError(
+                view: WebView?,
+                request: WebResourceRequest?,
+                error: WebResourceError?
+            ) {
+                super.onReceivedError(view, request, error)
+                if (request?.isForMainFrame == true) {
+                    Log.w(TAG, "MainFrame error: ${error?.description}")
+                }
             }
         }
+    }
 
-        // Back button navigation handling
+    private fun setupBackHandler() {
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (customView != null) {
+                    webView.webChromeClient?.onHideCustomView()
+                    return
+                }
+
                 webView.evaluateJavascript(
                     """
                     (function() {
-                        const player = document.getElementById('mobilePlayer');
-                        const search = document.getElementById('searchOverlay');
                         const sheet = document.getElementById('sheetBackdrop');
                         if (sheet && !sheet.classList.contains('hidden')) {
                             sheet.classList.add('hidden');
                             return true;
                         }
+                        const player = document.getElementById('mobilePlayer');
                         if (player && !player.classList.contains('hidden')) {
                             const btn = document.getElementById('dismissPlayerBtn');
                             if (btn) btn.click();
                             return true;
                         }
+                        const search = document.getElementById('searchOverlay');
                         if (search && !search.classList.contains('hidden')) {
                             search.classList.add('hidden');
                             return true;
@@ -131,21 +314,20 @@ class MainActivity : AppCompatActivity() {
                 }
             }
         })
-
-        // Load the local offline bundle
-        webView.loadUrl("file:///android_asset/public/index.html")
     }
 
     override fun onUserLeaveHint() {
         super.onUserLeaveHint()
-        // Automatic Picture-in-Picture when user goes home while watching video
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+        // Only enter Picture-in-Picture when an actual video is active
+        if (isVideoPlaying && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             try {
                 val params = PictureInPictureParams.Builder()
                     .setAspectRatio(Rational(16, 9))
                     .build()
                 enterPictureInPictureMode(params)
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG, "PiP error: ${e.message}")
+            }
         }
     }
 
@@ -154,28 +336,30 @@ class MainActivity : AppCompatActivity() {
         newConfig: Configuration
     ) {
         super.onPictureInPictureModeChanged(isInPictureInPictureMode, newConfig)
-        if (isInPictureInPictureMode) {
-            webView.evaluateJavascript(
-                "document.getElementById('playerHudTop')?.classList.add('hud-hidden'); document.getElementById('playerHudBottom')?.classList.add('hud-hidden');",
-                null
-            )
+        val script = if (isInPictureInPictureMode) {
+            "document.getElementById('playerHudTop')?.classList.add('hud-hidden'); document.getElementById('playerHudBottom')?.classList.add('hud-hidden');"
+        } else {
+            "document.getElementById('playerHudTop')?.classList.remove('hud-hidden'); document.getElementById('playerHudBottom')?.classList.remove('hud-hidden');"
+        }
+        webView.evaluateJavascript(script, null)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus) {
+            hideSystemBars(false)
         }
     }
 
-    private fun hideSystemUI() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            window.insetsController?.let {
-                it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                it.hide(WindowInsets.Type.systemBars())
+    private fun hideSystemBars(fullscreen: Boolean) {
+        try {
+            val controller = WindowCompat.getInsetsController(window, window.decorView)
+            controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            if (fullscreen) {
+                controller.hide(WindowInsetsCompat.Type.systemBars())
+            } else {
+                controller.hide(WindowInsetsCompat.Type.statusBars())
             }
-        } else {
-            @Suppress("DEPRECATION")
-            window.decorView.systemUiVisibility = (
-                View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-                or View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-                or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-                or View.SYSTEM_UI_FLAG_FULLSCREEN
-            )
-        }
+        } catch (_: Exception) {}
     }
 }

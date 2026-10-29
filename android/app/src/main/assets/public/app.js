@@ -122,6 +122,62 @@ const sheetTitle = document.getElementById('sheetTitle');
 const sheetBody = document.getElementById('sheetBody');
 const closeSheetBtn = document.getElementById('closeSheetBtn');
 
+// Offline & Error
+const offlineState = document.getElementById('offlineState');
+const retryBtn = document.getElementById('retryBtn');
+
+// Centralized Native-First API Call
+async function apiCall(endpoint, params = {}) {
+  // 1. Android Native Bridge (Zero CORS, zero network handshake, direct Kotlin speed)
+  if (window.KrmziBridge) {
+    try {
+      let rawJson = null;
+      if (endpoint === '/api/episodes') {
+        rawJson = window.KrmziBridge.getEpisodes(parseInt(params.page) || 1);
+      } else if (endpoint === '/api/series') {
+        rawJson = window.KrmziBridge.getSeries(parseInt(params.page) || 1);
+      } else if (endpoint === '/api/series/detail') {
+        rawJson = window.KrmziBridge.getSeriesDetail(params.url || '');
+      } else if (endpoint === '/api/episode/detail') {
+        rawJson = window.KrmziBridge.getEpisodeDetail(params.url || '');
+      } else if (endpoint === '/api/search') {
+        rawJson = window.KrmziBridge.search(params.q || '');
+      }
+      if (rawJson) {
+        const parsed = JSON.parse(rawJson);
+        if (parsed) return parsed;
+      }
+    } catch (bridgeErr) {
+      console.warn('KrmziBridge execution failed, falling back to fetch:', bridgeErr);
+    }
+  }
+
+  // 2. Fetch fallback (for Node development or WebViewAssetLoader)
+  const qs = new URLSearchParams(params).toString();
+  const url = qs ? `${endpoint}?${qs}` : endpoint;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`HTTP error ${res.status}`);
+  }
+  return await res.json();
+}
+
+function showOfflineState() {
+  if (offlineState) offlineState.classList.remove('hidden');
+}
+
+function hideOfflineState() {
+  if (offlineState) offlineState.classList.add('hidden');
+}
+
+function checkAndShowOffline() {
+  if (state.episodes.length === 0 && state.series.length === 0) {
+    showOfflineState();
+    spotlightTitle.textContent = 'تعذر الاتصال بالموقع';
+    spotlightBadgeText.textContent = 'غير متصل';
+  }
+}
+
 // Initialization
 document.addEventListener('DOMContentLoaded', () => {
   setupNavigation();
@@ -130,6 +186,12 @@ document.addEventListener('DOMContentLoaded', () => {
   setupSearch();
   setupPlayerTouch();
   setupBottomSheet();
+  if (retryBtn) {
+    retryBtn.addEventListener('click', () => {
+      haptic();
+      loadData(true);
+    });
+  }
   loadData();
 });
 
@@ -145,9 +207,18 @@ function haptic(intensity = 'light') {
 }
 
 // Initial Data
-async function loadData() {
+async function loadData(isRefresh = false) {
   renderHistory();
-  await Promise.all([fetchEpisodes(), fetchSeries()]);
+  hideOfflineState();
+  if (isRefresh) {
+    haptic('double');
+  }
+  try {
+    await Promise.all([fetchEpisodes(), fetchSeries()]);
+  } catch (err) {
+    console.error('Error during initial loadData:', err);
+    checkAndShowOffline();
+  }
 }
 
 // Navigation Dock
@@ -238,7 +309,7 @@ function setupPullToRefresh() {
   contentCanvas.addEventListener('touchend', async () => {
     if (pullRefreshIndicator.classList.contains('visible')) {
       haptic('heavy');
-      await Promise.all([fetchEpisodes(), fetchSeries()]);
+      await loadData(true);
       setTimeout(() => {
         pullRefreshIndicator.classList.remove('visible');
       }, 400);
@@ -273,16 +344,21 @@ function applyGenreFilter() {
 async function fetchEpisodes() {
   renderEpisodesSkeleton();
   try {
-    const res = await fetch('/api/episodes?page=1');
-    const data = await res.json();
+    const data = await apiCall('/api/episodes', { page: 1 });
     state.episodes = data.episodes || [];
 
     if (state.episodes.length > 0) {
       renderSpotlight(state.episodes[0]);
       renderEpisodesCarousel(state.episodes);
+      hideOfflineState();
+    } else {
+      checkAndShowOffline();
     }
+    return data;
   } catch (err) {
     console.error('Failed to load episodes:', err);
+    checkAndShowOffline();
+    throw err;
   }
 }
 
@@ -290,14 +366,18 @@ async function fetchEpisodes() {
 async function fetchSeries() {
   renderSeriesSkeleton();
   try {
-    const res = await fetch('/api/series?page=1');
-    const data = await res.json();
+    const data = await apiCall('/api/series', { page: 1 });
     state.series = data.series || [];
     state.filteredSeries = state.series;
-    seriesCountSub.textContent = `${state.series.length} مسلسل`;
+    if (seriesCountSub) {
+      seriesCountSub.textContent = `${state.series.length} مسلسل`;
+    }
     renderSeriesGrid(state.filteredSeries);
+    return data;
   } catch (err) {
     console.error('Failed to load series:', err);
+    checkAndShowOffline();
+    throw err;
   }
 }
 
@@ -478,11 +558,10 @@ async function executeSearch(query) {
   `).join('');
 
   try {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
-    const data = await res.json();
+    const data = await apiCall('/api/search', { q: query });
     renderSearchResults(data.results || []);
   } catch (e) {
-    searchGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim);">تعذر البحث.</p>`;
+    searchGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 40px 0;">تعذر البحث. يرجى المحاولة لاحقاً.</p>`;
   }
 }
 
@@ -517,8 +596,7 @@ async function openEpisode(epUrl) {
   hudSeriesTitle.textContent = '';
 
   try {
-    const res = await fetch(`/api/episode/detail?url=${encodeURIComponent(epUrl)}`);
-    const ep = await res.json();
+    const ep = await apiCall('/api/episode/detail', { url: epUrl });
     state.currentEpisode = ep;
 
     hudEpTitle.textContent = ep.title;
@@ -537,10 +615,9 @@ async function openEpisode(epUrl) {
     } else {
       playerSpinner.innerHTML = '<p style="font-size: 13px;">لم تتوفر سيرفرات بث لهذه الحلقة.</p>';
     }
-
-  } catch (e) {
-    console.error('Failed to open episode:', e);
-    playerSpinner.innerHTML = '<p style="font-size: 13px;">حدث خطأ أثناء فتح الحلقة.</p>';
+  } catch (err) {
+    console.error('Failed to open episode:', err);
+    playerSpinner.innerHTML = '<p style="font-size: 13px; color: #ff5555;">تعذر تشغيل الحلقة. تحقق من الاتصال.</p>';
   }
 }
 
@@ -738,10 +815,16 @@ function setupPlayerTouch() {
   nativePlayer.addEventListener('play', () => {
     centerPlay.innerHTML = '<i class="fa-solid fa-pause"></i>';
     resetHudTimer();
+    if (window.KrmziBridge && window.KrmziBridge.setVideoPlaying) {
+      window.KrmziBridge.setVideoPlaying(true);
+    }
   });
   nativePlayer.addEventListener('pause', () => {
     centerPlay.innerHTML = '<i class="fa-solid fa-play"></i>';
     showHud(false);
+    if (window.KrmziBridge && window.KrmziBridge.setVideoPlaying) {
+      window.KrmziBridge.setVideoPlaying(false);
+    }
   });
 
   openServersSheetBtn.addEventListener('click', () => {
@@ -766,8 +849,21 @@ function setupPlayerTouch() {
     haptic();
     if (!document.fullscreenElement) {
       playerCanvas.requestFullscreen().catch(() => {});
+      if (window.KrmziBridge && window.KrmziBridge.setLandscape) {
+        window.KrmziBridge.setLandscape(true);
+      }
     } else {
       document.exitFullscreen().catch(() => {});
+      if (window.KrmziBridge && window.KrmziBridge.setLandscape) {
+        window.KrmziBridge.setLandscape(false);
+      }
+    }
+  });
+
+  document.addEventListener('fullscreenchange', () => {
+    const isFull = !!document.fullscreenElement;
+    if (window.KrmziBridge && window.KrmziBridge.setLandscape) {
+      window.KrmziBridge.setLandscape(isFull);
     }
   });
 
@@ -892,13 +988,18 @@ function closePlayer() {
   nativePlayer.src = '';
   embedPlayer.src = '';
   mobilePlayer.classList.add('hidden');
+  if (window.KrmziBridge && window.KrmziBridge.setVideoPlaying) {
+    window.KrmziBridge.setVideoPlaying(false);
+  }
+  if (window.KrmziBridge && window.KrmziBridge.setLandscape) {
+    window.KrmziBridge.setLandscape(false);
+  }
 }
 
 // Drawer Episodes
 async function loadDrawer(seriesUrl, currentEpUrl) {
   try {
-    const res = await fetch(`/api/series/detail?url=${encodeURIComponent(seriesUrl)}`);
-    const ser = await res.json();
+    const ser = await apiCall('/api/series/detail', { url: seriesUrl });
     state.currentSeriesEpisodes = ser.episodes || [];
     drawerCount.textContent = `${state.currentSeriesEpisodes.length} حلقة`;
 
@@ -1001,8 +1102,7 @@ function switchStreamQuality(url, qualityName) {
 async function openSeriesByUrl(url) {
   openSheet('جاري التحميل...', '<div class="spinner-ring" style="margin: 20px auto;"></div>');
   try {
-    const res = await fetch(`/api/series/detail?url=${encodeURIComponent(url)}`);
-    const ser = await res.json();
+    const ser = await apiCall('/api/series/detail', { url: url });
 
     const itemsHtml = `
       <div style="display: flex; gap: 12px; margin-bottom: 12px;">
