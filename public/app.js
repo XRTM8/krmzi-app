@@ -21,7 +21,7 @@ const state = {
   hudTimeout: null,
   autoNextTimerId: null,
   autoNextCancelled: false,
-  currentVersion: '1.0.5',
+  currentVersion: '1.0.6',
   pendingUpdate: null
 };
 
@@ -688,11 +688,12 @@ async function openEpisode(epUrl) {
       loadDrawer(ep.seriesUrl, ep.url);
     }
 
-    // Prioritize high-performance, proven embed streaming servers (Arab HD, estream, etc.)
-    if (ep.servers && ep.servers.length > 0) {
-      playSandboxedEmbed(ep.servers[0]);
-    } else if (ep.directStreams && ep.directStreams.length > 0) {
+    // 1. PRIORITIZE HIGH-QUALITY DIRECT STREAM (100% Ad-Free, 1080p Full HD Native Player)
+    if (ep.directStreams && ep.directStreams.length > 0) {
       playDirectStream(ep.directStreams);
+    } else if (ep.servers && ep.servers.length > 0) {
+      // 2. Fallback to embed only if no direct stream is extracted
+      playSandboxedEmbed(ep.servers[0]);
     } else {
       playerSpinner.innerHTML = '<p style="font-size: 13px;">لم تتوفر سيرفرات بث لهذه الحلقة.</p>';
     }
@@ -762,9 +763,9 @@ function playDirectStream(streams, index = 0) {
     }
   };
 
-  // Quick Watchdog: If playback doesn't start within 3.5 seconds, auto try next or switch to embed
+  // 8-second watchdog: if buffering/stalling, try next quality or fallback
   directWatchdogTimer = setTimeout(() => {
-    if (nativePlayer.readyState < 2 && nativePlayer.currentTime === 0) {
+    if (nativePlayer.paused && nativePlayer.readyState < 2 && nativePlayer.currentTime === 0) {
       console.warn(`Direct stream stall on quality ${selected.quality}, trying next...`);
       if (currentDirectIndex + 1 < streams.length) {
         playDirectStream(streams, currentDirectIndex + 1);
@@ -772,7 +773,7 @@ function playDirectStream(streams, index = 0) {
         fallbackToEmbedServer();
       }
     }
-  }, 3500);
+  }, 8000);
 
   nativePlayer.oncanplay = () => {
     playerSpinner.classList.add('hidden');
@@ -821,7 +822,12 @@ function playSandboxedEmbed(server) {
   embedPlayer.classList.remove('hidden');
   embedPlayer.src = server.embedUrl;
 
+  const spinnerTimer = setTimeout(() => {
+    playerSpinner.classList.add('hidden');
+  }, 5000);
+
   embedPlayer.onload = () => {
+    clearTimeout(spinnerTimer);
     playerSpinner.classList.add('hidden');
   };
 
@@ -1219,8 +1225,25 @@ function openServersSheet() {
   const ep = state.currentEpisode;
 
   let itemsHtml = '';
+
+  // 1. Highlight Direct Stream at the very top
+  if (ep.directStreams && ep.directStreams.length > 0) {
+    const isAct = state.activeServer && state.activeServer.name && state.activeServer.name.includes('مباشر');
+    itemsHtml += `
+      <div class="sheet-row ${isAct ? 'active' : ''}" data-server-type="direct">
+        <span><i class="fa-solid fa-bolt" style="color: #10b981;"></i> سيرفر مباشر (بدون إعلانات ⚡)</span>
+        <span class="sheet-pill direct">${isAct ? 'يعمل الآن ✓' : '1080p'}</span>
+      </div>
+    `;
+  }
+
+  // 2. Render all alternative embed servers
   if (ep.servers && ep.servers.length > 0) {
     ep.servers.forEach((s, idx) => {
+      // Don't duplicate direct server if it's already at top
+      if (s.name && (s.name.includes('مباشر') || s.name.toLowerCase() === 'ok') && ep.directStreams && ep.directStreams.length > 0) {
+        return;
+      }
       const isAct = state.activeServer && state.activeServer.name === s.name;
       itemsHtml += `
         <div class="sheet-row ${isAct ? 'active' : ''}" data-server-type="embed" data-server-index="${idx}">
@@ -1229,16 +1252,6 @@ function openServersSheet() {
         </div>
       `;
     });
-  }
-
-  if (ep.directStreams && ep.directStreams.length > 0) {
-    const isAct = state.activeServer && state.activeServer.name && state.activeServer.name.includes('مباشر');
-    itemsHtml += `
-      <div class="sheet-row ${isAct ? 'active' : ''}" data-server-type="direct">
-        <span><i class="fa-solid fa-bolt" style="color: #10b981;"></i> سيرفر مباشر (بدون إعلانات ⚡)</span>
-        <span class="sheet-pill direct">1080p</span>
-      </div>
-    `;
   }
 
   openSheet('سيرفرات المشاهدة', itemsHtml);

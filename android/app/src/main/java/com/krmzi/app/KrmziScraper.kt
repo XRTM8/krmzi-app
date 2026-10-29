@@ -376,102 +376,12 @@ object KrmziScraper {
         val servers = JSONArray()
         val directStreams = JSONArray()
         val seenServerIds = mutableSetOf<String>()
+        val rawServerList = mutableListOf<Pair<String, String>>()
 
-        // 1. Direct HTML serversList parsing
-        val liPattern = Pattern.compile("<li[^>]*data-name=\"([^\"]*)\"[^>]*data-server=\"([^\"]*)\"")
-        val liMatcher = liPattern.matcher(html)
-
-        while (liMatcher.find()) {
-            val sName = liMatcher.group(1) ?: ""
-            val sId = liMatcher.group(2) ?: ""
-            if (sName.isEmpty() && sId.isEmpty()) continue
-            if (sId.isNotEmpty() && seenServerIds.contains(sId)) continue
-            if (sId.isNotEmpty()) seenServerIds.add(sId)
-
-            var embedUrl = ""
-            var isDirect = false
-
-            when (sName) {
-                "ok" -> {
-                    embedUrl = "https://ok.ru/videoembed/$sId"
-                    try {
-                        val okHtml = fetchHtml(embedUrl)
-                        val optPattern = Pattern.compile("data-options=\"([^\"]+)\"")
-                        val optM = optPattern.matcher(okHtml)
-                        if (optM.find()) {
-                            val raw = (optM.group(1) ?: "").replace("&quot;", "\"")
-                            val okData = JSONObject(raw)
-                            val flashvars = okData.optJSONObject("flashvars")
-                            val metaObj = flashvars?.opt("metadata")
-                            val meta = if (metaObj is String) JSONObject(metaObj) else metaObj as? JSONObject
-
-                            val videos = meta?.optJSONArray("videos")
-                            if (videos != null && videos.length() > 0) {
-                                val qualityMap = mapOf(
-                                    "full" to "1080p (Full HD)",
-                                    "hd" to "720p (HD)",
-                                    "sd" to "480p (SD)",
-                                    "low" to "360p",
-                                    "lowest" to "240p",
-                                    "mobile" to "144p"
-                                )
-                                for (j in (videos.length() - 1) downTo 0) {
-                                    val v = videos.getJSONObject(j)
-                                    val vName = v.getString("name")
-                                    val vUrl = v.getString("url")
-                                    directStreams.put(JSONObject().apply {
-                                        put("quality", qualityMap[vName] ?: vName)
-                                        put("url", vUrl)
-                                    })
-                                }
-                                isDirect = true
-                            }
-                        }
-                    } catch (e: Exception) {
-                        Log.w(TAG, "Failed OK.ru extract: ${e.message}")
-                    }
-                }
-                "Arab HD" -> embedUrl = "https://arabhd.onl/embed-$sId.html"
-                "estream" -> embedUrl = "https://arabveturk.com/embed-$sId.html"
-                "box" -> embedUrl = "https://youdboox.com/embed-$sId.html"
-                "now" -> embedUrl = "https://extreamnow.org/embed-$sId.html"
-                "Red HD" -> embedUrl = "https://iplayerhls.com/e/$sId"
-                "Pro HD" -> embedUrl = "https://embedo.co/e/$sId"
-                "dailymotion" -> embedUrl = "https://www.dailymotion.com/embed/video/$sId"
-                "youtube" -> embedUrl = "https://www.youtube.com/embed/$sId"
-            }
-
-            if (embedUrl.isNotEmpty()) {
-                servers.put(JSONObject().apply {
-                    put("name", sName)
-                    put("id", sId)
-                    put("embedUrl", embedUrl)
-                    put("hasDirectStream", isDirect)
-                })
-            }
-        }
-
-        // 2. Fallback to default iframe if no servers yet
-        if (servers.length() == 0) {
-            val ifPattern = Pattern.compile("<iframe[^>]+src=\"([^\"]+)\"")
-            val ifm = ifPattern.matcher(html)
-            if (ifm.find()) {
-                val ifUrl = ifm.group(1) ?: ""
-                if (ifUrl.isNotEmpty()) {
-                    servers.put(JSONObject().apply {
-                        put("name", "سيرفر رئيسي")
-                        put("id", "main_frame")
-                        put("embedUrl", ifUrl)
-                        put("hasDirectStream", false)
-                    })
-                }
-            }
-        }
-
-        // 3. Fallback to Qesen Base64 payload if present
+        // 1. Primary: Extract servers from modern Qesen Base64 payload (used by 100% of krmzi episodes)
         val qesenPattern = Pattern.compile("href=\"https://qesen\\.net/krmzi\\?post=([^\"]+)\"")
         val qm = qesenPattern.matcher(html)
-        if (servers.length() == 0 && qm.find()) {
+        if (qm.find()) {
             try {
                 val b64 = qm.group(1) ?: ""
                 val decoded = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
@@ -479,25 +389,83 @@ object KrmziScraper {
                 val rawServers = postObj.optJSONArray("servers") ?: JSONArray()
                 for (i in 0 until rawServers.length()) {
                     val s = rawServers.getJSONObject(i)
-                    val sName = s.getString("name")
-                    val sId = s.getString("id")
-                    var embedUrl = ""
-                    when (sName) {
-                        "ok" -> embedUrl = "https://ok.ru/videoembed/$sId"
-                        "Arab HD" -> embedUrl = "https://arabhd.onl/embed-$sId.html"
-                        "estream" -> embedUrl = "https://arabveturk.com/embed-$sId.html"
-                        "Red HD" -> embedUrl = "https://iplayerhls.com/e/$sId"
-                    }
-                    if (embedUrl.isNotEmpty()) {
-                        servers.put(JSONObject().apply {
-                            put("name", sName)
-                            put("id", sId)
-                            put("embedUrl", embedUrl)
-                            put("hasDirectStream", false)
-                        })
+                    val sName = s.optString("name", "").trim()
+                    val sId = s.optString("id", "").trim()
+                    if (sName.isNotEmpty() && sId.isNotEmpty() && !seenServerIds.contains(sId)) {
+                        rawServerList.add(Pair(sName, sId))
+                        seenServerIds.add(sId)
                     }
                 }
-            } catch (_: Exception) {}
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed parsing Qesen payload: ${e.message}")
+            }
+        }
+
+        // 2. Legacy: Extract servers from <li> tags if present
+        val liPattern = Pattern.compile("<li[^>]*data-name=\"([^\"]*)\"[^>]*data-server=\"([^\"]*)\"")
+        val liMatcher = liPattern.matcher(html)
+        while (liMatcher.find()) {
+            val sName = (liMatcher.group(1) ?: "").trim()
+            val sId = (liMatcher.group(2) ?: "").trim()
+            if (sName.isNotEmpty() && sId.isNotEmpty() && !seenServerIds.contains(sId)) {
+                rawServerList.add(Pair(sName, sId))
+                seenServerIds.add(sId)
+            }
+        }
+
+        // 3. Fallback: Extract from direct iframe
+        if (rawServerList.isEmpty()) {
+            val ifPattern = Pattern.compile("<iframe[^>]+src=\"([^\"]+)\"")
+            val ifm = ifPattern.matcher(html)
+            if (ifm.find()) {
+                val ifUrl = ifm.group(1) ?: ""
+                if (ifUrl.isNotEmpty()) {
+                    rawServerList.add(Pair("سيرفر رئيسي", ifUrl))
+                }
+            }
+        }
+
+        // Process servers and prioritize OK.ru direct stream extraction
+        for ((sName, sId) in rawServerList) {
+            var embedUrl = ""
+            var isDirect = false
+
+            when (sName.lowercase()) {
+                "ok" -> {
+                    embedUrl = "https://ok.ru/videoembed/$sId"
+                    if (directStreams.length() == 0) {
+                        isDirect = extractOkDirectStreams(sId, directStreams)
+                    }
+                }
+                "arab hd" -> embedUrl = "https://arabhd.onl/embed-$sId.html"
+                "estream" -> embedUrl = "https://arabveturk.com/embed-$sId.html"
+                "red hd" -> embedUrl = "https://iplayerhls.com/e/$sId"
+                "box" -> embedUrl = "https://youdboox.com/embed-$sId.html"
+                "now" -> embedUrl = "https://extreamnow.org/embed-$sId.html"
+                "pro hd" -> embedUrl = "https://embedo.co/e/$sId"
+                "dailymotion" -> embedUrl = "https://www.dailymotion.com/embed/video/$sId"
+                "youtube" -> embedUrl = "https://www.youtube.com/embed/$sId"
+                "express" -> embedUrl = if (sId.startsWith("http")) sId else "https://cloud.mail.ru/public/$sId"
+                else -> {
+                    if (sId.startsWith("http")) embedUrl = sId
+                }
+            }
+
+            if (embedUrl.isNotEmpty()) {
+                val serverObj = JSONObject().apply {
+                    put("name", sName)
+                    put("id", sId)
+                    put("embedUrl", embedUrl)
+                    put("hasDirectStream", isDirect)
+                }
+
+                // If this is the direct stream server, place it at the very top
+                if (isDirect) {
+                    servers.put(0, serverObj)
+                } else {
+                    servers.put(serverObj)
+                }
+            }
         }
 
         val result = JSONObject().apply {
@@ -513,5 +481,66 @@ object KrmziScraper {
 
         putCache(cacheKey, result)
         return result
+    }
+
+    private fun extractOkDirectStreams(sId: String, directStreams: JSONArray): Boolean {
+        return try {
+            val embedUrl = "https://ok.ru/videoembed/$sId"
+            val request = Request.Builder()
+                .url(embedUrl)
+                .header("User-Agent", USER_AGENT)
+                .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
+                .header("Accept-Language", "ar,en-US;q=0.9,en;q=0.8")
+                .build()
+
+            val okHtml = client.newCall(request).execute().use { res ->
+                if (res.isSuccessful) res.body?.string() ?: "" else ""
+            }
+            if (okHtml.isEmpty()) return false
+
+            val optPattern = Pattern.compile("data-options=\"([^\"]+)\"")
+            val optM = optPattern.matcher(okHtml)
+            if (optM.find()) {
+                val raw = (optM.group(1) ?: "").replace("&quot;", "\"")
+                val okData = JSONObject(raw)
+                val flashvars = okData.optJSONObject("flashvars")
+                val metaObj = flashvars?.opt("metadata")
+                val meta = if (metaObj is String) JSONObject(metaObj) else metaObj as? JSONObject
+
+                val videos = meta?.optJSONArray("videos")
+                if (videos != null && videos.length() > 0) {
+                    val qualityMap = mapOf(
+                        "full" to "1080p (Full HD)",
+                        "hd" to "720p (HD)",
+                        "sd" to "480p (SD)",
+                        "low" to "360p",
+                        "lowest" to "240p",
+                        "mobile" to "144p"
+                    )
+                    val order = listOf("full", "hd", "sd", "low", "lowest", "mobile")
+                    val videoList = mutableListOf<JSONObject>()
+                    for (j in 0 until videos.length()) {
+                        videoList.add(videos.getJSONObject(j))
+                    }
+                    for (q in order) {
+                        val match = videoList.firstOrNull { it.optString("name") == q }
+                        if (match != null) {
+                            val vUrl = match.optString("url")
+                            if (vUrl.isNotEmpty()) {
+                                directStreams.put(JSONObject().apply {
+                                    put("quality", qualityMap[q] ?: q)
+                                    put("url", vUrl)
+                                })
+                            }
+                        }
+                    }
+                    return directStreams.length() > 0
+                }
+            }
+            false
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed OK.ru extract for $sId: ${e.message}")
+            false
+        }
     }
 }

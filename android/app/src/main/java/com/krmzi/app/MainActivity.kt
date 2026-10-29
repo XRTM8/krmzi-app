@@ -378,27 +378,8 @@ class MainActivity : AppCompatActivity() {
                     return false
                 }
 
-                // 3. For main frame navigations: allow known streaming sources, block external ad takeovers
-                if (url.contains("krmzi.org") ||
-                    url.contains("ok.ru") ||
-                    url.contains("okcdn") ||
-                    url.contains("mycdn.me") ||
-                    url.contains("arabhd") ||
-                    url.contains("arabveturk") ||
-                    url.contains("turkvearab") ||
-                    url.contains("artrk.online") ||
-                    url.contains("iplayerhls") ||
-                    url.contains("youdboox") ||
-                    url.contains("extreamnow") ||
-                    url.contains("embedo") ||
-                    url.contains("dailymotion") ||
-                    url.contains("youtube")
-                ) {
-                    return false
-                }
-
-                // Block external pop-up / ad redirects attempting to hijack the main app window
-                Log.d(TAG, "Blocked external popup navigation to: $url")
+                // 3. Prevent external sites or ads from hijacking the main application window
+                Log.d(TAG, "Prevented external navigation on main frame: $url")
                 return true
             }
 
