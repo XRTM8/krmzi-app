@@ -656,6 +656,9 @@ async function openEpisode(epUrl) {
     const ep = await apiCall('/api/episode/detail', { url: epUrl });
     state.currentEpisode = ep;
 
+    // Immediately save to history so it's pinned to the top as the latest watched episode!
+    saveHistory(true);
+
     hudEpTitle.textContent = ep.title;
     hudSeriesTitle.textContent = ep.episodeNum ? `الحلقة ${ep.episodeNum}` : '';
 
@@ -678,10 +681,22 @@ async function openEpisode(epUrl) {
   }
 }
 
+let directWatchdogTimer = null;
+let currentDirectIndex = 0;
+
+function clearDirectWatchdog() {
+  if (directWatchdogTimer) {
+    clearTimeout(directWatchdogTimer);
+    directWatchdogTimer = null;
+  }
+}
+
 function resetPlayer() {
+  clearDirectWatchdog();
   nativePlayer.pause();
   nativePlayer.src = '';
-  embedPlayer.src = '';
+  embedPlayer.src = 'about:blank';
+  mobilePlayer.classList.remove('embed-mode');
   timelineProgress.style.width = '0%';
   timelineThumb.style.right = '0%';
   hudTime.textContent = '00:00 / 00:00';
@@ -691,17 +706,56 @@ function resetPlayer() {
   state.autoNextCancelled = false;
 }
 
-function playDirectStream(streams) {
+function playDirectStream(streams, index = 0) {
+  clearDirectWatchdog();
+  mobilePlayer.classList.remove('embed-mode');
   embedPlayer.classList.add('hidden');
-  embedPlayer.src = '';
+  embedPlayer.src = 'about:blank';
   nativePlayer.classList.remove('hidden');
-  playerSpinner.classList.add('hidden');
+  playerSpinner.classList.remove('hidden');
 
-  let selected = streams.find(s => s.quality === state.preferredQuality) || streams[0];
+  currentDirectIndex = index;
+  let selected = streams[currentDirectIndex];
+  if (!selected) {
+    fallbackToEmbedServer();
+    return;
+  }
+
   state.activeQuality = selected;
   state.activeServer = { name: 'مباشر (بدون إعلانات ⚡)' };
   activeServerLabel.textContent = 'مباشر ⚡';
   activeQualityLabel.textContent = selected.quality;
+
+  nativePlayer.onerror = (e) => {
+    console.warn(`Direct stream quality ${selected.quality} error, trying next...`);
+    clearDirectWatchdog();
+    if (currentDirectIndex + 1 < streams.length) {
+      playDirectStream(streams, currentDirectIndex + 1);
+    } else {
+      fallbackToEmbedServer();
+    }
+  };
+
+  // Watchdog: If playback doesn't start within 5.5 seconds, auto try next stream or embed
+  directWatchdogTimer = setTimeout(() => {
+    if (nativePlayer.readyState < 2 && nativePlayer.currentTime === 0) {
+      console.warn(`Direct stream stall on quality ${selected.quality}, trying next...`);
+      if (currentDirectIndex + 1 < streams.length) {
+        playDirectStream(streams, currentDirectIndex + 1);
+      } else {
+        fallbackToEmbedServer();
+      }
+    }
+  }, 5500);
+
+  nativePlayer.oncanplay = () => {
+    playerSpinner.classList.add('hidden');
+  };
+
+  nativePlayer.onplaying = () => {
+    clearDirectWatchdog();
+    playerSpinner.classList.add('hidden');
+  };
 
   nativePlayer.src = selected.url;
 
@@ -710,15 +764,31 @@ function playDirectStream(streams) {
     nativePlayer.currentTime = saved.currentTime;
   }
 
-  nativePlayer.play().catch(() => {});
+  nativePlayer.play().catch(err => {
+    console.warn('Native player play catch:', err);
+  });
   showHud();
 }
 
+function fallbackToEmbedServer() {
+  clearDirectWatchdog();
+  const ep = state.currentEpisode;
+  if (ep && ep.servers && ep.servers.length > 0) {
+    showPill('fa-rotate', 'تم الانتقال لسيرفر بديل');
+    playSandboxedEmbed(ep.servers[0]);
+  } else {
+    playerSpinner.innerHTML = '<p style="font-size: 13px; color: #ff5555;">تعذر تشغيل الفيديو من جميع السيرفرات.</p>';
+  }
+}
+
 function playSandboxedEmbed(server) {
+  clearDirectWatchdog();
   nativePlayer.pause();
+  nativePlayer.src = '';
   nativePlayer.classList.add('hidden');
   playerSpinner.classList.add('hidden');
 
+  mobilePlayer.classList.add('embed-mode');
   embedPlayer.classList.remove('hidden');
   embedPlayer.src = server.embedUrl;
 
@@ -961,12 +1031,16 @@ function toggleHud() {
 function showHud(autoHide = true) {
   playerHudTop.classList.remove('hud-hidden');
   playerHudBottom.classList.remove('hud-hidden');
-  hudCenter.classList.remove('hud-hidden');
+  if (!mobilePlayer.classList.contains('embed-mode')) {
+    hudCenter.classList.remove('hud-hidden');
+  } else {
+    hudCenter.classList.add('hud-hidden');
+  }
   if (autoHide) resetHudTimer();
 }
 
 function hideHud() {
-  if (nativePlayer.paused) return;
+  if (!mobilePlayer.classList.contains('embed-mode') && nativePlayer.paused) return;
   playerHudTop.classList.add('hud-hidden');
   playerHudBottom.classList.add('hud-hidden');
   hudCenter.classList.add('hud-hidden');
@@ -1041,10 +1115,12 @@ function onProgress() {
 }
 
 function closePlayer() {
+  clearDirectWatchdog();
   saveHistory(true);
   nativePlayer.pause();
   nativePlayer.src = '';
-  embedPlayer.src = '';
+  embedPlayer.src = 'about:blank';
+  mobilePlayer.classList.remove('embed-mode');
   mobilePlayer.classList.add('hidden');
   if (window.KrmziBridge && window.KrmziBridge.setVideoPlaying) {
     window.KrmziBridge.setVideoPlaying(false);
@@ -1219,7 +1295,7 @@ function refreshFavState() {
 
 let lastSaveTime = 0;
 function saveHistory(force = false) {
-  if (!state.currentEpisode || !nativePlayer.duration) return;
+  if (!state.currentEpisode) return;
   const now = Date.now();
   if (!force && now - lastSaveTime < 3000) return;
   lastSaveTime = now;
@@ -1230,6 +1306,9 @@ function saveHistory(force = false) {
     sTitle = ep.title.replace(/الحلقة\s*\d+.*/, '').trim();
   }
 
+  const cur = (nativePlayer && !isNaN(nativePlayer.currentTime) && nativePlayer.currentTime > 0) ? nativePlayer.currentTime : 0;
+  const dur = (nativePlayer && !isNaN(nativePlayer.duration) && nativePlayer.duration > 0) ? nativePlayer.duration : 0;
+
   const item = {
     title: ep.title,
     seriesTitle: sTitle || ep.title,
@@ -1237,14 +1316,21 @@ function saveHistory(force = false) {
     episodeNum: ep.episodeNum || '',
     url: ep.url,
     thumbnail: ep.poster || '',
-    currentTime: nativePlayer.currentTime,
-    duration: nativePlayer.duration,
+    currentTime: cur,
+    duration: dur,
     updatedAt: now
   };
 
   // Replace any existing entry for this series so the series always points to the latest reached episode!
   const idx = state.history.findIndex(h => h.url === item.url || (item.seriesTitle && h.seriesTitle === item.seriesTitle));
-  if (idx >= 0) state.history.splice(idx, 1);
+  if (idx >= 0) {
+    // Preserve previously stored progress if player is in embed mode or just opened
+    if (cur === 0 && state.history[idx].currentTime > 0) {
+      item.currentTime = state.history[idx].currentTime;
+      item.duration = state.history[idx].duration;
+    }
+    state.history.splice(idx, 1);
+  }
   state.history.unshift(item);
   if (state.history.length > 25) state.history.pop();
   localStorage.setItem('krmzi_hist', JSON.stringify(state.history));

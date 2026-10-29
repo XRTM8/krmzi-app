@@ -89,12 +89,16 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Make window edge-to-edge
+        // Make window edge-to-edge with Hardware Acceleration
         try {
             WindowCompat.setDecorFitsSystemWindows(window, false)
             window.statusBarColor = Color.TRANSPARENT
             window.navigationBarColor = Color.BLACK
             window.addFlags(WindowManager.LayoutParams.FLAG_DRAWS_SYSTEM_BAR_BACKGROUNDS)
+            window.setFlags(
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED,
+                WindowManager.LayoutParams.FLAG_HARDWARE_ACCELERATED
+            )
         } catch (_: Exception) {}
 
         container = FrameLayout(this).apply {
@@ -110,8 +114,7 @@ class MainActivity : AppCompatActivity() {
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT
             )
-            setBackgroundColor(Color.parseColor("#060709"))
-            setLayerType(View.LAYER_TYPE_HARDWARE, null)
+            setBackgroundColor(Color.TRANSPARENT)
         }
 
         container.addView(webView)
@@ -191,9 +194,11 @@ class MainActivity : AppCompatActivity() {
             ): WebResourceResponse? {
                 val reqUri = request?.url ?: return null
                 val path = reqUri.path ?: ""
+                val host = reqUri.host?.lowercase() ?: ""
 
-                // 1. Intercept relative or absolute /api/ requests
-                if (path.contains("/api/")) {
+                // 1. Intercept relative or absolute /api/ requests ONLY for local app
+                val isLocalApp = host == "appassets.androidplatform.net" || host == "localhost" || host == "127.0.0.1" || host.isEmpty()
+                if (isLocalApp && path.contains("/api/")) {
                     return try {
                         val json = KrmziScraper.handle(reqUri.toString())
                         val headers = mutableMapOf(
@@ -236,27 +241,36 @@ class MainActivity : AppCompatActivity() {
                 view: WebView?,
                 request: WebResourceRequest?
             ): Boolean {
-                val url = request?.url?.toString() ?: ""
+                val url = request?.url?.toString()?.lowercase() ?: ""
                 
-                // Allow subframes, video tags, or whitelisted streaming origins
+                // Allow internal app navigation, media streams, and trusted video host CDNs
                 if (url.startsWith("https://appassets.androidplatform.net") ||
                     url.startsWith("file://") ||
                     url.contains("krmzi.org") ||
                     url.contains("ok.ru") ||
+                    url.contains("okcdn.ru") ||
                     url.contains("mycdn.me") ||
                     url.contains("vkusercontent.com") ||
                     url.contains("arabhd") ||
                     url.contains("arabveturk") ||
                     url.contains("iplayerhls") ||
+                    url.contains("youdboox") ||
+                    url.contains("extreamnow") ||
+                    url.contains("embedo") ||
                     url.contains("dailymotion") ||
-                    url.contains("youtube")
+                    url.contains("youtube") ||
+                    url.contains("vidmoly") ||
+                    url.contains("vidoza") ||
+                    url.contains("uqload") ||
+                    url.contains("streamtape") ||
+                    url.contains("fembed")
                 ) {
                     return false
                 }
 
-                // If it's a top-level page navigation to an unknown domain (external ad popup), block it
+                // Block external pop-up redirects from ad networks
                 if (request?.isForMainFrame == true) {
-                    Log.d(TAG, "Blocked external navigation to: $url")
+                    Log.d(TAG, "Blocked external popup navigation to: $url")
                     return true
                 }
 

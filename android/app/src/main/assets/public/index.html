@@ -8,6 +8,7 @@
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="theme-color" content="#070709">
+  <meta name="referrer" content="no-referrer">
   <link rel="manifest" href="manifest.json">
 
   <!-- Typography & Icons -->
@@ -176,11 +177,11 @@
       
       <!-- Video Stage -->
       <div class="video-stage" id="playerCanvas">
-        <!-- Native Video Stream -->
-        <video id="nativePlayer" playsinline webkit-playsinline preload="metadata" class="video-elem"></video>
+        <!-- Native Direct Video Stream -->
+        <video id="nativePlayer" playsinline webkit-playsinline preload="auto" referrerpolicy="no-referrer" class="video-elem"></video>
 
-        <!-- Sandboxed Clean Embed -->
-        <iframe id="embedPlayer" class="video-elem hidden" sandbox="allow-scripts allow-same-origin allow-forms" allowfullscreen></iframe>
+        <!-- Clean Remote Video Embed (Ads safely filtered natively by Android WebView) -->
+        <iframe id="embedPlayer" class="video-elem hidden" allow="autoplay; fullscreen; encrypted-media; picture-in-picture" allowfullscreen referrerpolicy="no-referrer"></iframe>
 
         <!-- Brightness Dimmer Layer -->
         <div class="dimmer-layer" id="brightnessFilter"></div>
