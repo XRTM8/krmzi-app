@@ -258,6 +258,7 @@ class MainActivity : AppCompatActivity() {
         settings.databaseEnabled = true
         settings.allowFileAccess = true
         settings.allowContentAccess = true
+        settings.loadsImagesAutomatically = true
         settings.mediaPlaybackRequiresUserGesture = false
         settings.setSupportMultipleWindows(false)
         settings.javaScriptCanOpenWindowsAutomatically = false
@@ -265,6 +266,13 @@ class MainActivity : AppCompatActivity() {
         settings.useWideViewPort = true
         settings.loadWithOverviewMode = true
         settings.mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+
+        // Enable cookies & third-party cookies for iframe streaming players
+        try {
+            val cookieManager = CookieManager.getInstance()
+            cookieManager.setAcceptCookie(true)
+            cookieManager.setAcceptThirdPartyCookies(webView, true)
+        } catch (_: Exception) {}
 
         // Register Native JavaScript Bridge
         webView.addJavascriptInterface(KrmziBridge(), "KrmziBridge")
@@ -359,39 +367,39 @@ class MainActivity : AppCompatActivity() {
                 request: WebResourceRequest?
             ): Boolean {
                 val url = request?.url?.toString()?.lowercase() ?: ""
-                
-                // Allow internal app navigation, media streams, and trusted video host CDNs
-                if (url.startsWith("https://appassets.androidplatform.net") ||
-                    url.startsWith("file://") ||
-                    url.contains("krmzi.org") ||
+
+                // 1. Allow internal app asset navigation
+                if (url.startsWith("https://appassets.androidplatform.net") || url.startsWith("file://")) {
+                    return false
+                }
+
+                // 2. Allow ALL subframe requests (video players, iframes, chunks, CDNs)
+                if (request?.isForMainFrame == false) {
+                    return false
+                }
+
+                // 3. For main frame navigations: allow known streaming sources, block external ad takeovers
+                if (url.contains("krmzi.org") ||
                     url.contains("ok.ru") ||
-                    url.contains("okcdn.ru") ||
+                    url.contains("okcdn") ||
                     url.contains("mycdn.me") ||
-                    url.contains("vkusercontent.com") ||
                     url.contains("arabhd") ||
                     url.contains("arabveturk") ||
+                    url.contains("turkvearab") ||
+                    url.contains("artrk.online") ||
                     url.contains("iplayerhls") ||
                     url.contains("youdboox") ||
                     url.contains("extreamnow") ||
                     url.contains("embedo") ||
                     url.contains("dailymotion") ||
-                    url.contains("youtube") ||
-                    url.contains("vidmoly") ||
-                    url.contains("vidoza") ||
-                    url.contains("uqload") ||
-                    url.contains("streamtape") ||
-                    url.contains("fembed")
+                    url.contains("youtube")
                 ) {
                     return false
                 }
 
-                // Block external pop-up redirects from ad networks
-                if (request?.isForMainFrame == true) {
-                    Log.d(TAG, "Blocked external popup navigation to: $url")
-                    return true
-                }
-
-                return false
+                // Block external pop-up / ad redirects attempting to hijack the main app window
+                Log.d(TAG, "Blocked external popup navigation to: $url")
+                return true
             }
 
             override fun onReceivedError(

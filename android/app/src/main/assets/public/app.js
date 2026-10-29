@@ -21,7 +21,7 @@ const state = {
   hudTimeout: null,
   autoNextTimerId: null,
   autoNextCancelled: false,
-  currentVersion: '1.0.4',
+  currentVersion: '1.0.5',
   pendingUpdate: null
 };
 
@@ -121,6 +121,8 @@ const toggleFullscreenBtn = document.getElementById('toggleFullscreenBtn');
 
 const drawerEpisodesCarousel = document.getElementById('drawerEpisodesCarousel');
 const drawerCount = document.getElementById('drawerCount');
+const drawerActiveServerName = document.getElementById('drawerActiveServerName');
+const drawerOpenServersBtn = document.getElementById('drawerOpenServersBtn');
 
 // Bottom Sheet
 const sheetBackdrop = document.getElementById('sheetBackdrop');
@@ -686,10 +688,11 @@ async function openEpisode(epUrl) {
       loadDrawer(ep.seriesUrl, ep.url);
     }
 
-    if (ep.directStreams && ep.directStreams.length > 0) {
-      playDirectStream(ep.directStreams);
-    } else if (ep.servers && ep.servers.length > 0) {
+    // Prioritize high-performance, proven embed streaming servers (Arab HD, estream, etc.)
+    if (ep.servers && ep.servers.length > 0) {
       playSandboxedEmbed(ep.servers[0]);
+    } else if (ep.directStreams && ep.directStreams.length > 0) {
+      playDirectStream(ep.directStreams);
     } else {
       playerSpinner.innerHTML = '<p style="font-size: 13px;">لم تتوفر سيرفرات بث لهذه الحلقة.</p>';
     }
@@ -712,8 +715,11 @@ function clearDirectWatchdog() {
 function resetPlayer() {
   clearDirectWatchdog();
   nativePlayer.pause();
-  nativePlayer.src = '';
+  nativePlayer.removeAttribute('src');
+  nativePlayer.load();
+  nativePlayer.classList.add('hidden');
   embedPlayer.src = 'about:blank';
+  embedPlayer.classList.add('hidden');
   mobilePlayer.classList.remove('embed-mode');
   timelineProgress.style.width = '0%';
   timelineThumb.style.right = '0%';
@@ -729,7 +735,6 @@ function playDirectStream(streams, index = 0) {
   mobilePlayer.classList.remove('embed-mode');
   embedPlayer.classList.add('hidden');
   embedPlayer.src = 'about:blank';
-  nativePlayer.classList.remove('hidden');
   playerSpinner.classList.remove('hidden');
 
   currentDirectIndex = index;
@@ -742,6 +747,9 @@ function playDirectStream(streams, index = 0) {
   state.activeQuality = selected;
   state.activeServer = { name: 'مباشر (بدون إعلانات ⚡)' };
   activeServerLabel.textContent = 'مباشر ⚡';
+  if (drawerActiveServerName) {
+    drawerActiveServerName.textContent = 'مباشر ⚡';
+  }
   activeQualityLabel.textContent = selected.quality;
 
   nativePlayer.onerror = (e) => {
@@ -754,7 +762,7 @@ function playDirectStream(streams, index = 0) {
     }
   };
 
-  // Watchdog: If playback doesn't start within 5.5 seconds, auto try next stream or embed
+  // Quick Watchdog: If playback doesn't start within 3.5 seconds, auto try next or switch to embed
   directWatchdogTimer = setTimeout(() => {
     if (nativePlayer.readyState < 2 && nativePlayer.currentTime === 0) {
       console.warn(`Direct stream stall on quality ${selected.quality}, trying next...`);
@@ -764,15 +772,17 @@ function playDirectStream(streams, index = 0) {
         fallbackToEmbedServer();
       }
     }
-  }, 5500);
+  }, 3500);
 
   nativePlayer.oncanplay = () => {
     playerSpinner.classList.add('hidden');
+    nativePlayer.classList.remove('hidden');
   };
 
   nativePlayer.onplaying = () => {
     clearDirectWatchdog();
     playerSpinner.classList.add('hidden');
+    nativePlayer.classList.remove('hidden');
   };
 
   nativePlayer.src = selected.url;
@@ -802,18 +812,26 @@ function fallbackToEmbedServer() {
 function playSandboxedEmbed(server) {
   clearDirectWatchdog();
   nativePlayer.pause();
-  nativePlayer.src = '';
+  nativePlayer.removeAttribute('src');
+  nativePlayer.load();
   nativePlayer.classList.add('hidden');
-  playerSpinner.classList.add('hidden');
+  playerSpinner.classList.remove('hidden');
 
   mobilePlayer.classList.add('embed-mode');
   embedPlayer.classList.remove('hidden');
   embedPlayer.src = server.embedUrl;
 
+  embedPlayer.onload = () => {
+    playerSpinner.classList.add('hidden');
+  };
+
   state.activeServer = server;
   activeServerLabel.textContent = server.name;
+  if (drawerActiveServerName) {
+    drawerActiveServerName.textContent = server.name;
+  }
   activeQualityLabel.textContent = 'تلقائي';
-  showHud();
+  showHud(false);
 }
 
 // Touch Gestures: Swipes, 2x Hold & Seek
@@ -976,6 +994,12 @@ function setupPlayerTouch() {
     haptic();
     openServersSheet();
   });
+  if (drawerOpenServersBtn) {
+    drawerOpenServersBtn.addEventListener('click', () => {
+      haptic();
+      openServersSheet();
+    });
+  }
   openQualitySheetBtn.addEventListener('click', () => {
     haptic();
     openQualitySheet();
@@ -1195,47 +1219,80 @@ function openServersSheet() {
   const ep = state.currentEpisode;
 
   let itemsHtml = '';
-  if (ep.directStreams && ep.directStreams.length > 0) {
-    itemsHtml += `
-      <div class="sheet-row active" onclick="haptic(); playDirectStream(state.currentEpisode.directStreams); closeSheet();">
-        <span><i class="fa-solid fa-bolt" style="color: #10b981;"></i> سيرفر مباشر (بدون إعلانات 1080p)</span>
-        <span class="sheet-pill direct">موصى به</span>
-      </div>
-    `;
-  }
-
-  if (ep.servers) {
-    ep.servers.forEach(s => {
+  if (ep.servers && ep.servers.length > 0) {
+    ep.servers.forEach((s, idx) => {
+      const isAct = state.activeServer && state.activeServer.name === s.name;
       itemsHtml += `
-        <div class="sheet-row" onclick="haptic(); playSandboxedEmbed({ embedUrl: '${s.embedUrl}', name: '${s.name}' }); closeSheet();">
+        <div class="sheet-row ${isAct ? 'active' : ''}" data-server-type="embed" data-server-index="${idx}">
           <span><i class="fa-solid fa-server"></i> سيرفر ${s.name}</span>
-          <span class="sheet-pill">حماية 🛡️</span>
+          <span class="sheet-pill ${isAct ? 'direct' : ''}">${isAct ? 'يعمل الآن ✓' : 'تشغيل'}</span>
         </div>
       `;
     });
   }
 
-  openSheet('سيرفر المشاهدة', itemsHtml);
+  if (ep.directStreams && ep.directStreams.length > 0) {
+    const isAct = state.activeServer && state.activeServer.name && state.activeServer.name.includes('مباشر');
+    itemsHtml += `
+      <div class="sheet-row ${isAct ? 'active' : ''}" data-server-type="direct">
+        <span><i class="fa-solid fa-bolt" style="color: #10b981;"></i> سيرفر مباشر (بدون إعلانات ⚡)</span>
+        <span class="sheet-pill direct">1080p</span>
+      </div>
+    `;
+  }
+
+  openSheet('سيرفرات المشاهدة', itemsHtml);
+
+  // Bind clean click handlers without string interpolation bugs
+  const rows = sheetBody.querySelectorAll('.sheet-row');
+  rows.forEach(row => {
+    row.addEventListener('click', () => {
+      haptic();
+      const sType = row.getAttribute('data-server-type');
+      if (sType === 'direct') {
+        playDirectStream(ep.directStreams);
+      } else {
+        const sIdx = parseInt(row.getAttribute('data-server-index'));
+        if (ep.servers && ep.servers[sIdx]) {
+          playSandboxedEmbed(ep.servers[sIdx]);
+        }
+      }
+      closeSheet();
+    });
+  });
 }
 
 function openQualitySheet() {
-  if (!state.currentEpisode || !state.currentEpisode.directStreams) {
-    openSheet('دقة العرض', '<p style="text-align: center; color: var(--text-dim); padding: 10px; font-size: 13px;">الجودة تلقائية على هذا السيرفر.</p>');
+  if (!state.currentEpisode || !state.currentEpisode.directStreams || state.currentEpisode.directStreams.length === 0) {
+    openSheet('دقة العرض', '<p style="text-align: center; color: var(--text-dim); padding: 10px; font-size: 13px;">الجودة تلقائية وتتكيف مع سرعة اتصالك على هذا السيرفر.</p>');
     return;
   }
 
   const streams = state.currentEpisode.directStreams;
-  const itemsHtml = streams.map(s => {
+  let itemsHtml = '';
+  streams.forEach((s, idx) => {
     const isAct = state.activeQuality && state.activeQuality.quality === s.quality;
-    return `
-      <div class="sheet-row ${isAct ? 'active' : ''}" onclick="haptic(); switchStreamQuality('${s.url}', '${s.quality}'); closeSheet();">
+    itemsHtml += `
+      <div class="sheet-row ${isAct ? 'active' : ''}" data-quality-index="${idx}">
         <span>${s.quality}</span>
         ${isAct ? '<i class="fa-solid fa-check"></i>' : ''}
       </div>
     `;
-  }).join('');
+  });
 
   openSheet('اختيار الدقة', itemsHtml);
+
+  const rows = sheetBody.querySelectorAll('.sheet-row');
+  rows.forEach(row => {
+    row.addEventListener('click', () => {
+      haptic();
+      const qIdx = parseInt(row.getAttribute('data-quality-index'));
+      if (streams[qIdx]) {
+        switchStreamQuality(streams[qIdx].url, streams[qIdx].quality);
+      }
+      closeSheet();
+    });
+  });
 }
 
 function switchStreamQuality(url, qualityName) {
