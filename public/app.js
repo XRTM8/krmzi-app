@@ -1,0 +1,1085 @@
+/**
+ * KRMZI - Professional Minimalist UI/UX Engine
+ */
+
+const state = {
+  activeTab: 'home',
+  librarySubtab: 'favs',
+  episodes: [],
+  series: [],
+  filteredSeries: [],
+  activeFilter: 'all',
+  currentEpisode: null,
+  currentSeries: null,
+  currentSeriesEpisodes: [],
+  activeServer: null,
+  activeQuality: null,
+  brightness: 1.0,
+  favorites: JSON.parse(localStorage.getItem('krmzi_favs') || '[]'),
+  history: JSON.parse(localStorage.getItem('krmzi_hist') || '[]'),
+  preferredQuality: localStorage.getItem('krmzi_pref_quality') || '1080p (Full HD)',
+  hudTimeout: null,
+  autoNextTimerId: null,
+  autoNextCancelled: false
+};
+
+// DOM References
+const contentCanvas = document.getElementById('contentCanvas');
+const pullRefreshIndicator = document.getElementById('pullRefreshIndicator');
+const brandBtn = document.getElementById('brandBtn');
+
+// Spotlight
+const heroSpotlight = document.getElementById('heroSpotlight');
+const spotlightMedia = document.getElementById('spotlightMedia');
+const spotlightTitle = document.getElementById('spotlightTitle');
+const spotlightBadgeText = document.getElementById('spotlightBadgeText');
+const spotlightPlayBtn = document.getElementById('spotlightPlayBtn');
+const spotlightSeriesBtn = document.getElementById('spotlightSeriesBtn');
+
+// Feed Sections
+const historySection = document.getElementById('historySection');
+const historyCarousel = document.getElementById('historyCarousel');
+const clearHistoryBtn = document.getElementById('clearHistoryBtn');
+
+const episodesSection = document.getElementById('episodesSection');
+const episodesCarousel = document.getElementById('episodesCarousel');
+const genrePills = document.querySelectorAll('.genre-pill');
+const seriesSection = document.getElementById('seriesSection');
+const seriesGrid = document.getElementById('seriesGrid');
+const seriesCountSub = document.getElementById('seriesCountSub');
+
+// Library
+const libraryView = document.getElementById('libraryView');
+const libraryGrid = document.getElementById('libraryGrid');
+const segmentBtns = document.querySelectorAll('.segment-btn');
+
+// Dock
+const dockBtns = document.querySelectorAll('.dock-btn');
+
+// Search Modal
+const openSearchBtn = document.getElementById('openSearchBtn');
+const searchOverlay = document.getElementById('searchOverlay');
+const closeSearchOverlay = document.getElementById('closeSearchOverlay');
+const overlaySearchInput = document.getElementById('overlaySearchInput');
+const clearSearchInput = document.getElementById('clearSearchInput');
+const searchInitialState = document.getElementById('searchInitialState');
+const searchGrid = document.getElementById('searchGrid');
+
+// Player Screen
+const mobilePlayer = document.getElementById('mobilePlayer');
+const playerCanvas = document.getElementById('playerCanvas');
+const nativePlayer = document.getElementById('nativePlayer');
+const embedPlayer = document.getElementById('embedPlayer');
+const brightnessFilter = document.getElementById('brightnessFilter');
+const speed2xPill = document.getElementById('speed2xPill');
+const swipeIndicator = document.getElementById('swipeIndicator');
+const swipeIcon = document.getElementById('swipeIcon');
+const swipeValue = document.getElementById('swipeValue');
+
+const skipIntroBtn = document.getElementById('skipIntroBtn');
+const autoNextCard = document.getElementById('autoNextCard');
+const autoNextTitle = document.getElementById('autoNextTitle');
+const autoNextTimer = document.getElementById('autoNextTimer');
+const autoNextPlayBtn = document.getElementById('autoNextPlayBtn');
+const autoNextCancelBtn = document.getElementById('autoNextCancelBtn');
+
+const playerSpinner = document.getElementById('playerSpinner');
+const gesturesLayer = document.getElementById('gesturesLayer');
+const rippleLeft = document.getElementById('rippleLeft');
+const rippleRight = document.getElementById('rippleRight');
+
+const playerHudTop = document.getElementById('playerHudTop');
+const playerHudBottom = document.getElementById('playerHudBottom');
+const dismissPlayerBtn = document.getElementById('dismissPlayerBtn');
+const hudEpTitle = document.getElementById('hudEpTitle');
+const hudSeriesTitle = document.getElementById('hudSeriesTitle');
+const playerFavBtn = document.getElementById('playerFavBtn');
+
+const hudCenter = document.getElementById('hudCenter');
+const centerPlay = document.getElementById('centerPlay');
+const centerRewind = document.getElementById('centerRewind');
+const centerForward = document.getElementById('centerForward');
+
+const timelineBar = document.getElementById('timelineBar');
+const timelineLoaded = document.getElementById('timelineLoaded');
+const timelineProgress = document.getElementById('timelineProgress');
+const timelineThumb = document.getElementById('timelineThumb');
+const hudTime = document.getElementById('hudTime');
+
+const openServersSheetBtn = document.getElementById('openServersSheetBtn');
+const activeServerLabel = document.getElementById('activeServerLabel');
+const openQualitySheetBtn = document.getElementById('openQualitySheetBtn');
+const activeQualityLabel = document.getElementById('activeQualityLabel');
+const togglePipBtn = document.getElementById('togglePipBtn');
+const toggleFullscreenBtn = document.getElementById('toggleFullscreenBtn');
+
+const drawerEpisodesCarousel = document.getElementById('drawerEpisodesCarousel');
+const drawerCount = document.getElementById('drawerCount');
+
+// Bottom Sheet
+const sheetBackdrop = document.getElementById('sheetBackdrop');
+const sheetTitle = document.getElementById('sheetTitle');
+const sheetBody = document.getElementById('sheetBody');
+const closeSheetBtn = document.getElementById('closeSheetBtn');
+
+// Initialization
+document.addEventListener('DOMContentLoaded', () => {
+  setupNavigation();
+  setupPullToRefresh();
+  setupGenreFilter();
+  setupSearch();
+  setupPlayerTouch();
+  setupBottomSheet();
+  loadData();
+});
+
+// Haptic Touch
+function haptic(intensity = 'light') {
+  if (navigator.vibrate) {
+    try {
+      if (intensity === 'heavy') navigator.vibrate([20]);
+      else if (intensity === 'double') navigator.vibrate([8, 25, 8]);
+      else navigator.vibrate([6]);
+    } catch (e) {}
+  }
+}
+
+// Initial Data
+async function loadData() {
+  renderHistory();
+  await Promise.all([fetchEpisodes(), fetchSeries()]);
+}
+
+// Navigation Dock
+function setupNavigation() {
+  brandBtn.addEventListener('click', () => {
+    haptic();
+    switchTab('home');
+  });
+
+  dockBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      haptic();
+      const tab = btn.dataset.tab;
+      switchTab(tab);
+    });
+  });
+
+  segmentBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      haptic();
+      segmentBtns.forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+      state.librarySubtab = btn.dataset.subtab;
+      renderLibrary();
+    });
+  });
+
+  clearHistoryBtn.addEventListener('click', () => {
+    haptic('heavy');
+    state.history = [];
+    localStorage.removeItem('krmzi_hist');
+    historySection.classList.add('hidden');
+    if (state.activeTab === 'library') renderLibrary();
+  });
+}
+
+function switchTab(tab) {
+  state.activeTab = tab;
+  dockBtns.forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+
+  if (tab === 'home') {
+    heroSpotlight.classList.remove('hidden');
+    episodesSection.classList.remove('hidden');
+    seriesSection.classList.remove('hidden');
+    libraryView.classList.add('hidden');
+    renderHistory();
+  } else if (tab === 'series') {
+    heroSpotlight.classList.add('hidden');
+    episodesSection.classList.add('hidden');
+    seriesSection.classList.remove('hidden');
+    historySection.classList.add('hidden');
+    libraryView.classList.add('hidden');
+  } else if (tab === 'search') {
+    openSearch();
+    return;
+  } else if (tab === 'library') {
+    heroSpotlight.classList.add('hidden');
+    episodesSection.classList.add('hidden');
+    seriesSection.classList.add('hidden');
+    historySection.classList.add('hidden');
+    libraryView.classList.remove('hidden');
+    renderLibrary();
+  }
+
+  contentCanvas.scrollTo({ top: 0, behavior: 'smooth' });
+}
+
+// Pull to Refresh
+function setupPullToRefresh() {
+  let startY = 0;
+  let isPulling = false;
+
+  contentCanvas.addEventListener('touchstart', (e) => {
+    if (contentCanvas.scrollTop === 0) {
+      startY = e.touches[0].clientY;
+      isPulling = true;
+    }
+  }, { passive: true });
+
+  contentCanvas.addEventListener('touchmove', (e) => {
+    if (!isPulling || contentCanvas.scrollTop > 0) return;
+    const dy = e.touches[0].clientY - startY;
+    if (dy > 45) {
+      pullRefreshIndicator.classList.add('visible');
+    }
+  }, { passive: true });
+
+  contentCanvas.addEventListener('touchend', async () => {
+    if (pullRefreshIndicator.classList.contains('visible')) {
+      haptic('heavy');
+      await Promise.all([fetchEpisodes(), fetchSeries()]);
+      setTimeout(() => {
+        pullRefreshIndicator.classList.remove('visible');
+      }, 400);
+    }
+    isPulling = false;
+  });
+}
+
+// Genre Filter
+function setupGenreFilter() {
+  genrePills.forEach(pill => {
+    pill.addEventListener('click', () => {
+      haptic();
+      genrePills.forEach(p => p.classList.remove('active'));
+      pill.classList.add('active');
+      state.activeFilter = pill.dataset.filter;
+      applyGenreFilter();
+    });
+  });
+}
+
+function applyGenreFilter() {
+  if (state.activeFilter === 'all') {
+    state.filteredSeries = state.series;
+  } else {
+    state.filteredSeries = state.series.filter(s => s.title.includes(state.activeFilter));
+  }
+  renderSeriesGrid(state.filteredSeries);
+}
+
+// Fetch Episodes
+async function fetchEpisodes() {
+  renderEpisodesSkeleton();
+  try {
+    const res = await fetch('/api/episodes?page=1');
+    const data = await res.json();
+    state.episodes = data.episodes || [];
+
+    if (state.episodes.length > 0) {
+      renderSpotlight(state.episodes[0]);
+      renderEpisodesCarousel(state.episodes);
+    }
+  } catch (err) {
+    console.error('Failed to load episodes:', err);
+  }
+}
+
+// Fetch Series
+async function fetchSeries() {
+  renderSeriesSkeleton();
+  try {
+    const res = await fetch('/api/series?page=1');
+    const data = await res.json();
+    state.series = data.series || [];
+    state.filteredSeries = state.series;
+    seriesCountSub.textContent = `${state.series.length} مسلسل`;
+    renderSeriesGrid(state.filteredSeries);
+  } catch (err) {
+    console.error('Failed to load series:', err);
+  }
+}
+
+function renderSpotlight(ep) {
+  spotlightMedia.style.backgroundImage = `url(${ep.thumbnail})`;
+  spotlightTitle.textContent = ep.title;
+  spotlightBadgeText.textContent = ep.episodeNum ? `الحلقة ${ep.episodeNum}` : 'الأحدث الآن';
+
+  spotlightPlayBtn.onclick = () => {
+    haptic();
+    openEpisode(ep.url);
+  };
+  spotlightSeriesBtn.onclick = () => {
+    haptic();
+    searchSeries(ep.seriesTitle);
+  };
+}
+
+function renderEpisodesCarousel(episodes) {
+  episodesCarousel.innerHTML = episodes.map(ep => `
+    <div class="ep-tile" onclick="haptic(); openEpisode('${ep.url}')">
+      <div class="ep-tile-poster">
+        <img src="${ep.thumbnail}" alt="${ep.title}" class="ep-tile-img" loading="lazy">
+        ${ep.episodeNum ? `<div class="ep-tile-badge">حلقة <span>${ep.episodeNum}</span></div>` : ''}
+      </div>
+      <div class="ep-tile-name">${ep.title}</div>
+      <div class="ep-tile-series">${ep.seriesTitle}</div>
+    </div>
+  `).join('');
+}
+
+function renderSeriesGrid(seriesList) {
+  if (seriesList.length === 0) {
+    seriesGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 30px 0; font-size: 13px;">لا توجد مسلسلات تطابق هذا التصنيف.</p>`;
+    return;
+  }
+  seriesGrid.innerHTML = seriesList.map(ser => `
+    <div class="series-tile" onclick="haptic(); openSeriesByUrl('${ser.url}')">
+      <img src="${ser.thumbnail}" alt="${ser.title}" class="series-tile-thumb" loading="lazy">
+      <div class="series-tile-body">
+        <div class="series-tile-title">${ser.title}</div>
+        <div class="series-tile-sub">تصفح الحلقات</div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderHistory() {
+  if (state.history.length === 0) {
+    historySection.classList.add('hidden');
+    return;
+  }
+  historySection.classList.remove('hidden');
+
+  historyCarousel.innerHTML = state.history.map(item => {
+    const progressPercent = item.duration ? Math.min(100, (item.currentTime / item.duration) * 100) : 0;
+    return `
+      <div class="ep-tile" onclick="haptic(); openEpisode('${item.url}')">
+        <div class="ep-tile-poster">
+          <img src="${item.thumbnail}" alt="${item.title}" class="ep-tile-img">
+          <div class="tile-progress-track">
+            <div class="tile-progress-fill" style="width: ${progressPercent}%;"></div>
+          </div>
+        </div>
+        <div class="ep-tile-name">${item.title}</div>
+        <div class="ep-tile-series">توقف عند ${formatTime(item.currentTime)}</div>
+      </div>
+    `;
+  }).join('');
+}
+
+function renderLibrary() {
+  if (state.librarySubtab === 'favs') {
+    if (state.favorites.length === 0) {
+      libraryGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 60px 0; font-size: 13px;">لم تقم بإضافة مسلسلات للمفضلة بعد.</p>`;
+      return;
+    }
+    libraryGrid.innerHTML = state.favorites.map(fav => `
+      <div class="series-tile" onclick="haptic(); openEpisode('${fav.url}')">
+        <img src="${fav.thumbnail}" alt="${fav.title}" class="series-tile-thumb">
+        <div class="series-tile-body">
+          <div class="series-tile-title">${fav.title}</div>
+          <div class="series-tile-sub"><i class="fa-solid fa-play"></i> استئناف</div>
+        </div>
+      </div>
+    `).join('');
+  } else {
+    if (state.history.length === 0) {
+      libraryGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 60px 0; font-size: 13px;">سجل المشاهدة فارغ.</p>`;
+      return;
+    }
+    libraryGrid.innerHTML = state.history.map(hist => `
+      <div class="series-tile" onclick="haptic(); openEpisode('${hist.url}')">
+        <img src="${hist.thumbnail}" alt="${hist.title}" class="series-tile-thumb">
+        <div class="series-tile-body">
+          <div class="series-tile-title">${hist.title}</div>
+          <div class="series-tile-sub">متبقي ${formatTime((hist.duration || 0) - hist.currentTime)}</div>
+        </div>
+      </div>
+    `).join('');
+  }
+}
+
+// Skeletons
+function renderEpisodesSkeleton() {
+  episodesCarousel.innerHTML = Array(4).fill(0).map(() => `
+    <div class="ep-tile">
+      <div class="ep-tile-poster skeleton-cell"></div>
+      <div class="skeleton-cell" style="height: 12px; border-radius: 4px; margin-top: 4px;"></div>
+    </div>
+  `).join('');
+}
+
+function renderSeriesSkeleton() {
+  seriesGrid.innerHTML = Array(4).fill(0).map(() => `
+    <div class="series-tile">
+      <div class="skeleton-cell" style="aspect-ratio: 16/11;"></div>
+      <div class="series-tile-body">
+        <div class="skeleton-cell" style="height: 12px; border-radius: 4px;"></div>
+      </div>
+    </div>
+  `).join('');
+}
+
+// Search System
+function setupSearch() {
+  openSearchBtn.addEventListener('click', () => {
+    haptic();
+    openSearch();
+  });
+  closeSearchOverlay.addEventListener('click', () => {
+    haptic();
+    closeSearch();
+  });
+
+  let searchTimer;
+  overlaySearchInput.addEventListener('input', (e) => {
+    const q = e.target.value.trim();
+    clearSearchInput.classList.toggle('hidden', !q);
+    clearTimeout(searchTimer);
+
+    if (!q) {
+      searchInitialState.classList.remove('hidden');
+      searchGrid.classList.add('hidden');
+      return;
+    }
+
+    searchTimer = setTimeout(() => executeSearch(q), 300);
+  });
+
+  clearSearchInput.addEventListener('click', () => {
+    haptic();
+    overlaySearchInput.value = '';
+    clearSearchInput.classList.add('hidden');
+    searchInitialState.classList.remove('hidden');
+    searchGrid.classList.add('hidden');
+  });
+}
+
+function openSearch() {
+  searchOverlay.classList.remove('hidden');
+  setTimeout(() => overlaySearchInput.focus(), 100);
+}
+
+function closeSearch() {
+  searchOverlay.classList.add('hidden');
+  overlaySearchInput.value = '';
+  clearSearchInput.classList.add('hidden');
+  searchInitialState.classList.remove('hidden');
+  searchGrid.classList.add('hidden');
+}
+
+async function executeSearch(query) {
+  searchInitialState.classList.add('hidden');
+  searchGrid.classList.remove('hidden');
+  searchGrid.innerHTML = Array(4).fill(0).map(() => `
+    <div class="series-tile"><div class="skeleton-cell" style="aspect-ratio: 16/11;"></div></div>
+  `).join('');
+
+  try {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+    const data = await res.json();
+    renderSearchResults(data.results || []);
+  } catch (e) {
+    searchGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim);">تعذر البحث.</p>`;
+  }
+}
+
+function renderSearchResults(results) {
+  if (results.length === 0) {
+    searchGrid.innerHTML = `<p style="grid-column: 1/-1; text-align: center; color: var(--text-dim); padding: 50px 0; font-size: 13px;">لم يتم العثور على نتائج.</p>`;
+    return;
+  }
+
+  searchGrid.innerHTML = results.map(item => {
+    const isSeries = item.type === 'series';
+    const clickFn = isSeries ? `openSeriesByUrl('${item.url}')` : `openEpisode('${item.url}')`;
+    return `
+      <div class="series-tile" onclick="closeSearch(); haptic(); ${clickFn}">
+        <img src="${item.thumbnail}" alt="${item.title}" class="series-tile-thumb" loading="lazy">
+        <div class="series-tile-body">
+          <div class="series-tile-title">${item.title}</div>
+          <div class="series-tile-sub">${isSeries ? 'مسلسل كامل' : 'حلقة'}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// Player Logic
+async function openEpisode(epUrl) {
+  mobilePlayer.classList.remove('hidden');
+  playerSpinner.classList.remove('hidden');
+  resetPlayer();
+
+  hudEpTitle.textContent = 'جاري التحميل...';
+  hudSeriesTitle.textContent = '';
+
+  try {
+    const res = await fetch(`/api/episode/detail?url=${encodeURIComponent(epUrl)}`);
+    const ep = await res.json();
+    state.currentEpisode = ep;
+
+    hudEpTitle.textContent = ep.title;
+    hudSeriesTitle.textContent = ep.episodeNum ? `الحلقة ${ep.episodeNum}` : '';
+
+    refreshFavState();
+
+    if (ep.seriesUrl) {
+      loadDrawer(ep.seriesUrl, ep.url);
+    }
+
+    if (ep.directStreams && ep.directStreams.length > 0) {
+      playDirectStream(ep.directStreams);
+    } else if (ep.servers && ep.servers.length > 0) {
+      playSandboxedEmbed(ep.servers[0]);
+    } else {
+      playerSpinner.innerHTML = '<p style="font-size: 13px;">لم تتوفر سيرفرات بث لهذه الحلقة.</p>';
+    }
+
+  } catch (e) {
+    console.error('Failed to open episode:', e);
+    playerSpinner.innerHTML = '<p style="font-size: 13px;">حدث خطأ أثناء فتح الحلقة.</p>';
+  }
+}
+
+function resetPlayer() {
+  nativePlayer.pause();
+  nativePlayer.src = '';
+  embedPlayer.src = '';
+  timelineProgress.style.width = '0%';
+  timelineThumb.style.right = '0%';
+  hudTime.textContent = '00:00 / 00:00';
+  skipIntroBtn.classList.add('hidden');
+  autoNextCard.classList.add('hidden');
+  clearInterval(state.autoNextTimerId);
+  state.autoNextCancelled = false;
+}
+
+function playDirectStream(streams) {
+  embedPlayer.classList.add('hidden');
+  embedPlayer.src = '';
+  nativePlayer.classList.remove('hidden');
+  playerSpinner.classList.add('hidden');
+
+  let selected = streams.find(s => s.quality === state.preferredQuality) || streams[0];
+  state.activeQuality = selected;
+  state.activeServer = { name: 'مباشر (بدون إعلانات ⚡)' };
+  activeServerLabel.textContent = 'مباشر ⚡';
+  activeQualityLabel.textContent = selected.quality;
+
+  nativePlayer.src = selected.url;
+
+  const saved = state.history.find(h => h.url === state.currentEpisode.url);
+  if (saved && saved.currentTime > 10) {
+    nativePlayer.currentTime = saved.currentTime;
+  }
+
+  nativePlayer.play().catch(() => {});
+  showHud();
+}
+
+function playSandboxedEmbed(server) {
+  nativePlayer.pause();
+  nativePlayer.classList.add('hidden');
+  playerSpinner.classList.add('hidden');
+
+  embedPlayer.classList.remove('hidden');
+  embedPlayer.src = server.embedUrl;
+
+  state.activeServer = server;
+  activeServerLabel.textContent = server.name;
+  activeQualityLabel.textContent = 'تلقائي';
+  showHud();
+}
+
+// Touch Gestures: Swipes, 2x Hold & Seek
+function setupPlayerTouch() {
+  dismissPlayerBtn.addEventListener('click', () => {
+    haptic();
+    closePlayer();
+  });
+
+  let touchStartX = 0;
+  let touchStartY = 0;
+  let longPressTimer = null;
+  let is2xActive = false;
+  let isVerticalSwipe = false;
+  let swipeTarget = null;
+  let startVal = 1;
+  let lastTapTime = 0;
+
+  gesturesLayer.addEventListener('touchstart', (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+    isVerticalSwipe = false;
+    is2xActive = false;
+
+    const rect = gesturesLayer.getBoundingClientRect();
+    const xPos = touch.clientX - rect.left;
+    swipeTarget = xPos < rect.width / 2 ? 'brightness' : 'volume';
+    startVal = swipeTarget === 'brightness' ? state.brightness : nativePlayer.volume;
+
+    longPressTimer = setTimeout(() => {
+      if (!nativePlayer.paused && !isVerticalSwipe) {
+        is2xActive = true;
+        haptic('double');
+        nativePlayer.playbackRate = 2.0;
+        speed2xPill.classList.remove('hidden');
+      }
+    }, 350);
+  }, { passive: true });
+
+  gesturesLayer.addEventListener('touchmove', (e) => {
+    if (e.touches.length !== 1) return;
+    const touch = e.touches[0];
+    const dx = touch.clientX - touchStartX;
+    const dy = touch.clientY - touchStartY;
+
+    if (Math.abs(dy) > 12 && Math.abs(dy) > Math.abs(dx)) {
+      clearTimeout(longPressTimer);
+      isVerticalSwipe = true;
+
+      const delta = -dy / 140;
+      const newVal = Math.max(0.1, Math.min(1.0, startVal + delta));
+
+      if (swipeTarget === 'brightness') {
+        state.brightness = newVal;
+        const darkness = (1 - newVal) * 0.85;
+        brightnessFilter.style.setProperty('--brightness-darkness', darkness);
+        showPill('fa-sun', `${Math.round(newVal * 100)}%`);
+      } else {
+        nativePlayer.volume = newVal;
+        const icon = newVal === 0 ? 'fa-volume-xmark' : newVal < 0.5 ? 'fa-volume-low' : 'fa-volume-high';
+        showPill(icon, `${Math.round(newVal * 100)}%`);
+      }
+    }
+  }, { passive: true });
+
+  gesturesLayer.addEventListener('touchend', () => {
+    clearTimeout(longPressTimer);
+
+    if (is2xActive) {
+      is2xActive = false;
+      haptic();
+      nativePlayer.playbackRate = 1.0;
+      speed2xPill.classList.add('hidden');
+      return;
+    }
+
+    if (isVerticalSwipe) {
+      setTimeout(() => swipeIndicator.classList.add('hidden'), 450);
+      return;
+    }
+
+    const now = Date.now();
+    const tapLength = now - lastTapTime;
+    const rect = gesturesLayer.getBoundingClientRect();
+    const isLeftHalf = (touchStartX - rect.left) < rect.width / 2;
+
+    if (tapLength < 300 && tapLength > 0) {
+      haptic('double');
+      if (isLeftHalf) {
+        seekRelative(-10);
+        triggerRipple(rippleLeft);
+      } else {
+        seekRelative(10);
+        triggerRipple(rippleRight);
+      }
+    } else {
+      toggleHud();
+    }
+    lastTapTime = now;
+  });
+
+  centerPlay.addEventListener('click', () => {
+    haptic();
+    togglePlay();
+  });
+  centerRewind.addEventListener('click', () => {
+    haptic();
+    seekRelative(-10);
+  });
+  centerForward.addEventListener('click', () => {
+    haptic();
+    seekRelative(10);
+  });
+
+  skipIntroBtn.addEventListener('click', () => {
+    haptic('heavy');
+    nativePlayer.currentTime += 85;
+    skipIntroBtn.classList.add('hidden');
+  });
+
+  autoNextPlayBtn.addEventListener('click', () => {
+    haptic();
+    playNextEpisodeNow();
+  });
+  autoNextCancelBtn.addEventListener('click', () => {
+    haptic();
+    state.autoNextCancelled = true;
+    autoNextCard.classList.add('hidden');
+    clearInterval(state.autoNextTimerId);
+  });
+
+  timelineBar.addEventListener('click', (e) => {
+    if (!nativePlayer.duration) return;
+    haptic();
+    const rect = timelineBar.getBoundingClientRect();
+    const pos = (rect.right - e.clientX) / rect.width;
+    nativePlayer.currentTime = pos * nativePlayer.duration;
+  });
+
+  nativePlayer.addEventListener('timeupdate', onTimeUpdate);
+  nativePlayer.addEventListener('progress', onProgress);
+  nativePlayer.addEventListener('play', () => {
+    centerPlay.innerHTML = '<i class="fa-solid fa-pause"></i>';
+    resetHudTimer();
+  });
+  nativePlayer.addEventListener('pause', () => {
+    centerPlay.innerHTML = '<i class="fa-solid fa-play"></i>';
+    showHud(false);
+  });
+
+  openServersSheetBtn.addEventListener('click', () => {
+    haptic();
+    openServersSheet();
+  });
+  openQualitySheetBtn.addEventListener('click', () => {
+    haptic();
+    openQualitySheet();
+  });
+
+  togglePipBtn.addEventListener('click', () => {
+    haptic();
+    if (document.pictureInPictureElement) {
+      document.exitPictureInPicture().catch(() => {});
+    } else if (nativePlayer.requestPictureInPicture) {
+      nativePlayer.requestPictureInPicture().catch(() => {});
+    }
+  });
+
+  toggleFullscreenBtn.addEventListener('click', () => {
+    haptic();
+    if (!document.fullscreenElement) {
+      playerCanvas.requestFullscreen().catch(() => {});
+    } else {
+      document.exitFullscreen().catch(() => {});
+    }
+  });
+
+  playerFavBtn.addEventListener('click', () => {
+    haptic('heavy');
+    toggleFavorite();
+  });
+}
+
+function showPill(iconClass, text) {
+  swipeIcon.className = `fa-solid ${iconClass}`;
+  swipeValue.textContent = text;
+  swipeIndicator.classList.remove('hidden');
+}
+
+function togglePlay() {
+  if (nativePlayer.paused) nativePlayer.play();
+  else nativePlayer.pause();
+}
+
+function seekRelative(seconds) {
+  if (!nativePlayer.duration) return;
+  nativePlayer.currentTime = Math.max(0, Math.min(nativePlayer.duration, nativePlayer.currentTime + seconds));
+  resetHudTimer();
+}
+
+function triggerRipple(elem) {
+  elem.classList.add('active');
+  setTimeout(() => elem.classList.remove('active'), 500);
+}
+
+function toggleHud() {
+  const isHidden = playerHudTop.classList.contains('hud-hidden');
+  if (isHidden) showHud();
+  else hideHud();
+}
+
+function showHud(autoHide = true) {
+  playerHudTop.classList.remove('hud-hidden');
+  playerHudBottom.classList.remove('hud-hidden');
+  hudCenter.classList.remove('hud-hidden');
+  if (autoHide) resetHudTimer();
+}
+
+function hideHud() {
+  if (nativePlayer.paused) return;
+  playerHudTop.classList.add('hud-hidden');
+  playerHudBottom.classList.add('hud-hidden');
+  hudCenter.classList.add('hud-hidden');
+}
+
+function resetHudTimer() {
+  clearTimeout(state.hudTimeout);
+  state.hudTimeout = setTimeout(hideHud, 3200);
+}
+
+function onTimeUpdate() {
+  if (!nativePlayer.duration) return;
+  const current = nativePlayer.currentTime;
+  const duration = nativePlayer.duration;
+  const percent = (current / duration) * 100;
+
+  timelineProgress.style.width = `${percent}%`;
+  timelineThumb.style.right = `${100 - percent}%`;
+  hudTime.textContent = `${formatTime(current)} / ${formatTime(duration)}`;
+
+  if (current > 5 && current < 150) {
+    skipIntroBtn.classList.remove('hidden');
+  } else {
+    skipIntroBtn.classList.add('hidden');
+  }
+
+  if (duration - current <= 40 && !state.autoNextCancelled && state.currentSeriesEpisodes.length > 0) {
+    checkAutoNext();
+  }
+
+  saveHistory();
+}
+
+function checkAutoNext() {
+  if (state.autoNextTimerId || !autoNextCard.classList.contains('hidden')) return;
+
+  const currentIdx = state.currentSeriesEpisodes.findIndex(e => e.url === state.currentEpisode.url);
+  if (currentIdx >= 0 && currentIdx < state.currentSeriesEpisodes.length - 1) {
+    const nextEp = state.currentSeriesEpisodes[currentIdx + 1];
+    autoNextTitle.textContent = nextEp.title;
+    autoNextCard.classList.remove('hidden');
+
+    let secondsLeft = 5;
+    autoNextTimer.textContent = secondsLeft;
+
+    state.autoNextTimerId = setInterval(() => {
+      secondsLeft--;
+      autoNextTimer.textContent = secondsLeft;
+      if (secondsLeft <= 0) {
+        clearInterval(state.autoNextTimerId);
+        playNextEpisodeNow();
+      }
+    }, 1000);
+  }
+}
+
+function playNextEpisodeNow() {
+  clearInterval(state.autoNextTimerId);
+  autoNextCard.classList.add('hidden');
+  const currentIdx = state.currentSeriesEpisodes.findIndex(e => e.url === state.currentEpisode.url);
+  if (currentIdx >= 0 && currentIdx < state.currentSeriesEpisodes.length - 1) {
+    const nextEp = state.currentSeriesEpisodes[currentIdx + 1];
+    openEpisode(nextEp.url);
+  }
+}
+
+function onProgress() {
+  if (nativePlayer.buffered.length > 0 && nativePlayer.duration) {
+    const end = nativePlayer.buffered.end(nativePlayer.buffered.length - 1);
+    timelineLoaded.style.width = `${(end / nativePlayer.duration) * 100}%`;
+  }
+}
+
+function closePlayer() {
+  nativePlayer.pause();
+  nativePlayer.src = '';
+  embedPlayer.src = '';
+  mobilePlayer.classList.add('hidden');
+}
+
+// Drawer Episodes
+async function loadDrawer(seriesUrl, currentEpUrl) {
+  try {
+    const res = await fetch(`/api/series/detail?url=${encodeURIComponent(seriesUrl)}`);
+    const ser = await res.json();
+    state.currentSeriesEpisodes = ser.episodes || [];
+    drawerCount.textContent = `${state.currentSeriesEpisodes.length} حلقة`;
+
+    drawerEpisodesCarousel.innerHTML = state.currentSeriesEpisodes.map(ep => {
+      const isCur = ep.url === currentEpUrl;
+      return `
+        <div class="drawer-pill ${isCur ? 'active' : ''}" onclick="haptic(); openEpisode('${ep.url}')">
+          ${ep.title}
+        </div>
+      `;
+    }).join('');
+  } catch (e) {}
+}
+
+// Bottom Sheet
+function setupBottomSheet() {
+  closeSheetBtn.addEventListener('click', () => {
+    haptic();
+    closeSheet();
+  });
+  sheetBackdrop.addEventListener('click', (e) => {
+    if (e.target === sheetBackdrop) {
+      haptic();
+      closeSheet();
+    }
+  });
+}
+
+function openSheet(title, itemsHtml) {
+  sheetTitle.textContent = title;
+  sheetBody.innerHTML = itemsHtml;
+  sheetBackdrop.classList.remove('hidden');
+}
+
+function closeSheet() {
+  sheetBackdrop.classList.add('hidden');
+}
+
+function openServersSheet() {
+  if (!state.currentEpisode) return;
+  const ep = state.currentEpisode;
+
+  let itemsHtml = '';
+  if (ep.directStreams && ep.directStreams.length > 0) {
+    itemsHtml += `
+      <div class="sheet-row active" onclick="haptic(); playDirectStream(state.currentEpisode.directStreams); closeSheet();">
+        <span><i class="fa-solid fa-bolt" style="color: #10b981;"></i> سيرفر مباشر (بدون إعلانات 1080p)</span>
+        <span class="sheet-pill direct">موصى به</span>
+      </div>
+    `;
+  }
+
+  if (ep.servers) {
+    ep.servers.forEach(s => {
+      itemsHtml += `
+        <div class="sheet-row" onclick="haptic(); playSandboxedEmbed({ embedUrl: '${s.embedUrl}', name: '${s.name}' }); closeSheet();">
+          <span><i class="fa-solid fa-server"></i> سيرفر ${s.name}</span>
+          <span class="sheet-pill">حماية 🛡️</span>
+        </div>
+      `;
+    });
+  }
+
+  openSheet('سيرفر المشاهدة', itemsHtml);
+}
+
+function openQualitySheet() {
+  if (!state.currentEpisode || !state.currentEpisode.directStreams) {
+    openSheet('دقة العرض', '<p style="text-align: center; color: var(--text-dim); padding: 10px; font-size: 13px;">الجودة تلقائية على هذا السيرفر.</p>');
+    return;
+  }
+
+  const streams = state.currentEpisode.directStreams;
+  const itemsHtml = streams.map(s => {
+    const isAct = state.activeQuality && state.activeQuality.quality === s.quality;
+    return `
+      <div class="sheet-row ${isAct ? 'active' : ''}" onclick="haptic(); switchStreamQuality('${s.url}', '${s.quality}'); closeSheet();">
+        <span>${s.quality}</span>
+        ${isAct ? '<i class="fa-solid fa-check"></i>' : ''}
+      </div>
+    `;
+  }).join('');
+
+  openSheet('اختيار الدقة', itemsHtml);
+}
+
+function switchStreamQuality(url, qualityName) {
+  const curPos = nativePlayer.currentTime;
+  const wasPlaying = !nativePlayer.paused;
+  state.preferredQuality = qualityName;
+  localStorage.setItem('krmzi_pref_quality', qualityName);
+
+  nativePlayer.src = url;
+  nativePlayer.currentTime = curPos;
+  if (wasPlaying) nativePlayer.play();
+  activeQualityLabel.textContent = qualityName;
+}
+
+// Open Series Details in Bottom Sheet
+async function openSeriesByUrl(url) {
+  openSheet('جاري التحميل...', '<div class="spinner-ring" style="margin: 20px auto;"></div>');
+  try {
+    const res = await fetch(`/api/series/detail?url=${encodeURIComponent(url)}`);
+    const ser = await res.json();
+
+    const itemsHtml = `
+      <div style="display: flex; gap: 12px; margin-bottom: 12px;">
+        <img src="${ser.poster}" style="width: 70px; height: 100px; border-radius: 10px; object-fit: cover;">
+        <div>
+          <h4 style="font-size: 15px; font-weight: 800; margin-bottom: 4px;">${ser.title}</h4>
+          <p style="font-size: 11px; color: var(--text-sub); line-height: 1.5; max-height: 80px; overflow-y: auto;">${ser.story || 'لا يتوفر ملخص.'}</p>
+        </div>
+      </div>
+      <h5 style="font-size: 13px; font-weight: 800; margin: 10px 0 6px 0;">الحلقات (${ser.episodes.length}):</h5>
+      <div style="display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; max-height: 250px; overflow-y: auto;">
+        ${ser.episodes.map(ep => `
+          <button class="sheet-row" style="padding: 10px; font-size: 12px; justify-content: center;" onclick="closeSheet(); haptic(); openEpisode('${ep.url}');">
+            ${ep.title}
+          </button>
+        `).join('')}
+      </div>
+    `;
+
+    openSheet(ser.title, itemsHtml);
+  } catch (e) {
+    openSheet('خطأ', '<p style="text-align: center; color: var(--text-dim); font-size: 13px;">تعذر جلب الحلقات.</p>');
+  }
+}
+
+function searchSeries(title) {
+  executeSearch(title);
+  openSearch();
+}
+
+// Favorites & History
+function toggleFavorite() {
+  if (!state.currentEpisode) return;
+  const ep = state.currentEpisode;
+  const idx = state.favorites.findIndex(f => f.url === ep.url);
+
+  if (idx >= 0) {
+    state.favorites.splice(idx, 1);
+  } else {
+    state.favorites.unshift({
+      title: ep.title,
+      url: ep.url,
+      thumbnail: ep.poster
+    });
+  }
+
+  localStorage.setItem('krmzi_favs', JSON.stringify(state.favorites));
+  refreshFavState();
+}
+
+function refreshFavState() {
+  if (!state.currentEpisode) return;
+  const isFav = state.favorites.some(f => f.url === state.currentEpisode.url);
+  playerFavBtn.innerHTML = isFav ? '<i class="fa-solid fa-heart" style="color: var(--accent);"></i>' : '<i class="fa-regular fa-heart"></i>';
+}
+
+function saveHistory() {
+  if (!state.currentEpisode || !nativePlayer.duration) return;
+  const item = {
+    title: state.currentEpisode.title,
+    url: state.currentEpisode.url,
+    thumbnail: state.currentEpisode.poster,
+    currentTime: nativePlayer.currentTime,
+    duration: nativePlayer.duration,
+    updatedAt: Date.now()
+  };
+
+  const idx = state.history.findIndex(h => h.url === item.url);
+  if (idx >= 0) state.history.splice(idx, 1);
+  state.history.unshift(item);
+  if (state.history.length > 25) state.history.pop();
+  localStorage.setItem('krmzi_hist', JSON.stringify(state.history));
+}
+
+function formatTime(secs) {
+  if (isNaN(secs)) return '00:00';
+  const m = Math.floor(secs / 60);
+  const s = Math.floor(secs % 60);
+  return `${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
