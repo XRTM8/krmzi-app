@@ -33,7 +33,11 @@ const heroSpotlight = document.getElementById('heroSpotlight');
 const spotlightMedia = document.getElementById('spotlightMedia');
 const spotlightTitle = document.getElementById('spotlightTitle');
 const spotlightBadgeText = document.getElementById('spotlightBadgeText');
+const spotlightProgressWrap = document.getElementById('spotlightProgressWrap');
+const spotlightProgressBar = document.getElementById('spotlightProgressBar');
+const spotlightProgressText = document.getElementById('spotlightProgressText');
 const spotlightPlayBtn = document.getElementById('spotlightPlayBtn');
+const spotlightPlayBtnText = document.getElementById('spotlightPlayBtnText');
 const spotlightSeriesBtn = document.getElementById('spotlightSeriesBtn');
 
 // Feed Sections
@@ -381,10 +385,60 @@ async function fetchSeries() {
   }
 }
 
+function renderPinnedResume() {
+  if (state.history.length > 0) {
+    const item = state.history[0];
+    if (item.thumbnail) {
+      spotlightMedia.style.backgroundImage = `url(${item.thumbnail})`;
+    }
+    spotlightTitle.textContent = item.seriesTitle || item.title;
+    
+    const epNumText = item.episodeNum ? `الحلقة ${item.episodeNum}` : '';
+    spotlightBadgeText.innerHTML = `<i class="fa-solid fa-clock-rotate-left"></i> مثبت • آخر ما شاهدت ${epNumText ? '• ' + epNumText : ''}`;
+    
+    // Progress calculation
+    const duration = item.duration || 1;
+    const cur = item.currentTime || 0;
+    const pct = Math.min(100, Math.max(0, Math.round((cur / duration) * 100)));
+    
+    spotlightProgressWrap.classList.remove('hidden');
+    spotlightProgressBar.style.width = `${pct}%`;
+    spotlightProgressText.textContent = `وصلت إلى ${formatTime(cur)} / ${formatTime(duration)} (${pct}%)`;
+    
+    spotlightPlayBtnText.textContent = item.episodeNum ? `استئناف حلقة ${item.episodeNum}` : 'متابعة المشاهدة';
+    
+    spotlightPlayBtn.onclick = () => {
+      haptic('heavy');
+      openEpisode(item.url);
+    };
+    
+    spotlightSeriesBtn.onclick = () => {
+      haptic();
+      if (item.seriesUrl) {
+        openSeriesByUrl(item.seriesUrl);
+      } else {
+        searchSeries(item.seriesTitle || item.title);
+      }
+    };
+    return true;
+  } else {
+    spotlightProgressWrap.classList.add('hidden');
+    spotlightPlayBtnText.textContent = 'مشاهدة الحلقة';
+    return false;
+  }
+}
+
 function renderSpotlight(ep) {
+  // If user has watched history, prioritize pinning their latest watched series at the top!
+  if (renderPinnedResume()) {
+    return;
+  }
+
   spotlightMedia.style.backgroundImage = `url(${ep.thumbnail})`;
   spotlightTitle.textContent = ep.title;
   spotlightBadgeText.textContent = ep.episodeNum ? `الحلقة ${ep.episodeNum}` : 'الأحدث الآن';
+  spotlightProgressWrap.classList.add('hidden');
+  spotlightPlayBtnText.textContent = 'مشاهدة الحلقة';
 
   spotlightPlayBtn.onclick = () => {
     haptic();
@@ -426,6 +480,8 @@ function renderSeriesGrid(seriesList) {
 }
 
 function renderHistory() {
+  renderPinnedResume();
+
   if (state.history.length === 0) {
     historySection.classList.add('hidden');
     return;
@@ -441,9 +497,10 @@ function renderHistory() {
           <div class="tile-progress-track">
             <div class="tile-progress-fill" style="width: ${progressPercent}%;"></div>
           </div>
+          ${item.episodeNum ? `<div class="ep-tile-badge">حلقة <span>${item.episodeNum}</span></div>` : ''}
         </div>
-        <div class="ep-tile-name">${item.title}</div>
-        <div class="ep-tile-series">توقف عند ${formatTime(item.currentTime)}</div>
+        <div class="ep-tile-name">${item.seriesTitle || item.title}</div>
+        <div class="ep-tile-series">وصلت إلى ${formatTime(item.currentTime)} (${Math.round(progressPercent)}%)</div>
       </div>
     `;
   }).join('');
@@ -984,6 +1041,7 @@ function onProgress() {
 }
 
 function closePlayer() {
+  saveHistory(true);
   nativePlayer.pause();
   nativePlayer.src = '';
   embedPlayer.src = '';
@@ -1159,22 +1217,39 @@ function refreshFavState() {
   playerFavBtn.innerHTML = isFav ? '<i class="fa-solid fa-heart" style="color: var(--accent);"></i>' : '<i class="fa-regular fa-heart"></i>';
 }
 
-function saveHistory() {
+let lastSaveTime = 0;
+function saveHistory(force = false) {
   if (!state.currentEpisode || !nativePlayer.duration) return;
+  const now = Date.now();
+  if (!force && now - lastSaveTime < 3000) return;
+  lastSaveTime = now;
+
+  const ep = state.currentEpisode;
+  let sTitle = ep.seriesTitle || '';
+  if (!sTitle && ep.title) {
+    sTitle = ep.title.replace(/الحلقة\s*\d+.*/, '').trim();
+  }
+
   const item = {
-    title: state.currentEpisode.title,
-    url: state.currentEpisode.url,
-    thumbnail: state.currentEpisode.poster,
+    title: ep.title,
+    seriesTitle: sTitle || ep.title,
+    seriesUrl: ep.seriesUrl || '',
+    episodeNum: ep.episodeNum || '',
+    url: ep.url,
+    thumbnail: ep.poster || '',
     currentTime: nativePlayer.currentTime,
     duration: nativePlayer.duration,
-    updatedAt: Date.now()
+    updatedAt: now
   };
 
-  const idx = state.history.findIndex(h => h.url === item.url);
+  // Replace any existing entry for this series so the series always points to the latest reached episode!
+  const idx = state.history.findIndex(h => h.url === item.url || (item.seriesTitle && h.seriesTitle === item.seriesTitle));
   if (idx >= 0) state.history.splice(idx, 1);
   state.history.unshift(item);
   if (state.history.length > 25) state.history.pop();
   localStorage.setItem('krmzi_hist', JSON.stringify(state.history));
+
+  renderHistory();
 }
 
 function formatTime(secs) {

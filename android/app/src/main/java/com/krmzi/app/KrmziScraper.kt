@@ -70,6 +70,31 @@ object KrmziScraper {
         }
     }
 
+    // Helper to unwrap advertising redirects (e.g. sayyarh.com?url=aHR0cHM...)
+    fun extractRealUrl(rawUrl: String): String {
+        if (rawUrl.isEmpty()) return ""
+        if (rawUrl.contains("krmzi.org/episode/")) return rawUrl
+
+        val pattern = Pattern.compile("[?&](?:url|link|target)=([^&]+)")
+        val matcher = pattern.matcher(rawUrl)
+        if (matcher.find()) {
+            try {
+                var valStr = URLDecoder.decode(matcher.group(1) ?: "", "UTF-8")
+                if (!valStr.startsWith("http")) {
+                    val decodedBytes = Base64.decode(valStr, Base64.DEFAULT)
+                    val decodedStr = String(decodedBytes, Charsets.UTF_8)
+                    if (decodedStr.contains("krmzi.org")) {
+                        return URLDecoder.decode(decodedStr, "UTF-8")
+                    }
+                }
+                if (valStr.contains("krmzi.org")) {
+                    return valStr
+                }
+            } catch (_: Exception) {}
+        }
+        return rawUrl
+    }
+
     fun handle(fullUrl: String): String {
         return try {
             val uri = Uri.parse(fullUrl)
@@ -116,7 +141,8 @@ object KrmziScraper {
             val blockPattern = Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
             val matcher = blockPattern.matcher(html)
 
-            val linkPattern = Pattern.compile("<a\\s+href=\"(https://krmzi\\.org/episode/[^\"]+)\"\\s+title=\"([^\"]+)\"")
+            // Flexible link matcher that also captures redirected ad wrappers
+            val linkPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
             val numPattern = Pattern.compile("<div class=\"episodeNum\">[\\s\\S]*?<span>(\\d+)</span>")
             val thumbPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
 
@@ -125,7 +151,8 @@ object KrmziScraper {
                 val lm = linkPattern.matcher(blockHtml)
                 if (!lm.find()) continue
 
-                val epUrl = lm.group(1) ?: ""
+                val rawHref = lm.group(1) ?: ""
+                val epUrl = extractRealUrl(rawHref)
                 val fullTitle = (lm.group(2) ?: "").replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
 
                 val nm = numPattern.matcher(blockHtml)
@@ -176,7 +203,7 @@ object KrmziScraper {
             val blockPattern = Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
             val matcher = blockPattern.matcher(html)
 
-            val linkPattern = Pattern.compile("<a\\s+href=\"(https://krmzi\\.org/series/[^\"]+)\"\\s+title=\"([^\"]+)\"")
+            val linkPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
             val thumbPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
 
             while (matcher.find()) {
@@ -184,7 +211,8 @@ object KrmziScraper {
                 val lm = linkPattern.matcher(blockHtml)
                 if (!lm.find()) continue
 
-                val serUrl = lm.group(1) ?: ""
+                val rawHref = lm.group(1) ?: ""
+                val serUrl = extractRealUrl(rawHref)
                 val title = (lm.group(2) ?: "").replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
 
                 val tm = thumbPattern.matcher(blockHtml)
@@ -232,13 +260,14 @@ object KrmziScraper {
         val story = if (sm.find()) sm.group(1)?.replace(Regex("<[^>]+>"), "")?.trim() ?: "" else ""
 
         val episodes = JSONArray()
-        val epPattern = Pattern.compile("<a\\s+href=\"(https://krmzi\\.org/episode/[^\"]+)\"[^>]*>([\\s\\S]*?)</a>")
+        val epPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"[^>]*>([\\s\\S]*?)</a>")
         val em = epPattern.matcher(html)
         val seen = mutableSetOf<String>()
 
         while (em.find()) {
-            val epUrl = em.group(1) ?: continue
-            if (seen.contains(epUrl)) continue
+            val rawEpUrl = em.group(1) ?: continue
+            val epUrl = extractRealUrl(rawEpUrl)
+            if (seen.contains(epUrl) || !epUrl.contains("/episode/")) continue
             seen.add(epUrl)
 
             val inner = em.group(2)?.replace(Regex("<[^>]+>"), " ")?.trim() ?: ""
@@ -285,7 +314,7 @@ object KrmziScraper {
             val blockPattern = Pattern.compile("<div class=\"block-post\">([\\s\\S]*?)</div>\\s*</div>")
             val matcher = blockPattern.matcher(html)
 
-            val linkPattern = Pattern.compile("<a\\s+href=\"(https://krmzi\\.org/(?:series|episode)/[^\"]+)\"\\s+title=\"([^\"]+)\"")
+            val linkPattern = Pattern.compile("<a\\s+href=\"([^\"]+)\"\\s+title=\"([^\"]+)\"")
             val thumbPattern = Pattern.compile("url\\((https://krmzi\\.org/wp-content/uploads/[^)]+)\\)")
 
             while (matcher.find()) {
@@ -293,7 +322,8 @@ object KrmziScraper {
                 val lm = linkPattern.matcher(blockHtml)
                 if (!lm.find()) continue
 
-                val itemUrl = lm.group(1) ?: ""
+                val rawHref = lm.group(1) ?: ""
+                val itemUrl = extractRealUrl(rawHref)
                 val title = (lm.group(2) ?: "").replace(Regex("\\s*-\\s*قرمزي\\s*$"), "").trim()
                 val isSeries = itemUrl.contains("/series/")
 
@@ -343,88 +373,131 @@ object KrmziScraper {
         val sm = seriesPattern.matcher(html)
         val seriesUrl = if (sm.find()) sm.group(1) ?: "" else ""
 
-        val qesenPattern = Pattern.compile("href=\"https://qesen\\.net/krmzi\\?post=([^\"]+)\"")
-        val qm = qesenPattern.matcher(html)
-
         val servers = JSONArray()
         val directStreams = JSONArray()
+        val seenServerIds = mutableSetOf<String>()
 
-        if (qm.find()) {
+        // 1. Direct HTML serversList parsing
+        val liPattern = Pattern.compile("<li[^>]*data-name=\"([^\"]*)\"[^>]*data-server=\"([^\"]*)\"")
+        val liMatcher = liPattern.matcher(html)
+
+        while (liMatcher.find()) {
+            val sName = liMatcher.group(1) ?: ""
+            val sId = liMatcher.group(2) ?: ""
+            if (sName.isEmpty() && sId.isEmpty()) continue
+            if (sId.isNotEmpty() && seenServerIds.contains(sId)) continue
+            if (sId.isNotEmpty()) seenServerIds.add(sId)
+
+            var embedUrl = ""
+            var isDirect = false
+
+            when (sName) {
+                "ok" -> {
+                    embedUrl = "https://ok.ru/videoembed/$sId"
+                    try {
+                        val okHtml = fetchHtml(embedUrl)
+                        val optPattern = Pattern.compile("data-options=\"([^\"]+)\"")
+                        val optM = optPattern.matcher(okHtml)
+                        if (optM.find()) {
+                            val raw = (optM.group(1) ?: "").replace("&quot;", "\"")
+                            val okData = JSONObject(raw)
+                            val flashvars = okData.optJSONObject("flashvars")
+                            val metaObj = flashvars?.opt("metadata")
+                            val meta = if (metaObj is String) JSONObject(metaObj) else metaObj as? JSONObject
+
+                            val videos = meta?.optJSONArray("videos")
+                            if (videos != null && videos.length() > 0) {
+                                val qualityMap = mapOf(
+                                    "full" to "1080p (Full HD)",
+                                    "hd" to "720p (HD)",
+                                    "sd" to "480p (SD)",
+                                    "low" to "360p",
+                                    "lowest" to "240p",
+                                    "mobile" to "144p"
+                                )
+                                for (j in (videos.length() - 1) downTo 0) {
+                                    val v = videos.getJSONObject(j)
+                                    val vName = v.getString("name")
+                                    val vUrl = v.getString("url")
+                                    directStreams.put(JSONObject().apply {
+                                        put("quality", qualityMap[vName] ?: vName)
+                                        put("url", vUrl)
+                                    })
+                                }
+                                isDirect = true
+                            }
+                        }
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Failed OK.ru extract: ${e.message}")
+                    }
+                }
+                "Arab HD" -> embedUrl = "https://arabhd.onl/embed-$sId.html"
+                "estream" -> embedUrl = "https://arabveturk.com/embed-$sId.html"
+                "box" -> embedUrl = "https://youdboox.com/embed-$sId.html"
+                "now" -> embedUrl = "https://extreamnow.org/embed-$sId.html"
+                "Red HD" -> embedUrl = "https://iplayerhls.com/e/$sId"
+                "Pro HD" -> embedUrl = "https://embedo.co/e/$sId"
+                "dailymotion" -> embedUrl = "https://www.dailymotion.com/embed/video/$sId"
+                "youtube" -> embedUrl = "https://www.youtube.com/embed/$sId"
+            }
+
+            if (embedUrl.isNotEmpty()) {
+                servers.put(JSONObject().apply {
+                    put("name", sName)
+                    put("id", sId)
+                    put("embedUrl", embedUrl)
+                    put("hasDirectStream", isDirect)
+                })
+            }
+        }
+
+        // 2. Fallback to default iframe if no servers yet
+        if (servers.length() == 0) {
+            val ifPattern = Pattern.compile("<iframe[^>]+src=\"([^\"]+)\"")
+            val ifm = ifPattern.matcher(html)
+            if (ifm.find()) {
+                val ifUrl = ifm.group(1) ?: ""
+                if (ifUrl.isNotEmpty()) {
+                    servers.put(JSONObject().apply {
+                        put("name", "سيرفر رئيسي")
+                        put("id", "main_frame")
+                        put("embedUrl", ifUrl)
+                        put("hasDirectStream", false)
+                    })
+                }
+            }
+        }
+
+        // 3. Fallback to Qesen Base64 payload if present
+        val qesenPattern = Pattern.compile("href=\"https://qesen\\.net/krmzi\\?post=([^\"]+)\"")
+        val qm = qesenPattern.matcher(html)
+        if (servers.length() == 0 && qm.find()) {
             try {
                 val b64 = qm.group(1) ?: ""
                 val decoded = String(Base64.decode(b64, Base64.DEFAULT), Charsets.UTF_8)
                 val postObj = JSONObject(decoded)
                 val rawServers = postObj.optJSONArray("servers") ?: JSONArray()
-
                 for (i in 0 until rawServers.length()) {
                     val s = rawServers.getJSONObject(i)
                     val sName = s.getString("name")
                     val sId = s.getString("id")
                     var embedUrl = ""
-                    var isDirect = false
-
                     when (sName) {
-                        "ok" -> {
-                            embedUrl = "https://ok.ru/videoembed/$sId"
-                            try {
-                                val okHtml = fetchHtml(embedUrl)
-                                val optPattern = Pattern.compile("data-options=\"([^\"]+)\"")
-                                val optM = optPattern.matcher(okHtml)
-                                if (optM.find()) {
-                                    val raw = (optM.group(1) ?: "").replace("&quot;", "\"")
-                                    val okData = JSONObject(raw)
-                                    val flashvars = okData.optJSONObject("flashvars")
-                                    val metaObj = flashvars?.opt("metadata")
-                                    val meta = if (metaObj is String) JSONObject(metaObj) else metaObj as? JSONObject
-
-                                    val videos = meta?.optJSONArray("videos")
-                                    if (videos != null && videos.length() > 0) {
-                                        val qualityMap = mapOf(
-                                            "full" to "1080p (Full HD)",
-                                            "hd" to "720p (HD)",
-                                            "sd" to "480p (SD)",
-                                            "low" to "360p",
-                                            "lowest" to "240p",
-                                            "mobile" to "144p"
-                                        )
-                                        for (j in (videos.length() - 1) downTo 0) {
-                                            val v = videos.getJSONObject(j)
-                                            val vName = v.getString("name")
-                                            val vUrl = v.getString("url")
-                                            directStreams.put(JSONObject().apply {
-                                                put("quality", qualityMap[vName] ?: vName)
-                                                put("url", vUrl)
-                                            })
-                                        }
-                                        isDirect = true
-                                    }
-                                }
-                            } catch (e: Exception) {
-                                Log.w(TAG, "Failed to parse OK.ru direct stream: ${e.message}")
-                            }
-                        }
+                        "ok" -> embedUrl = "https://ok.ru/videoembed/$sId"
                         "Arab HD" -> embedUrl = "https://arabhd.onl/embed-$sId.html"
                         "estream" -> embedUrl = "https://arabveturk.com/embed-$sId.html"
-                        "box" -> embedUrl = "https://youdboox.com/embed-$sId.html"
-                        "now" -> embedUrl = "https://extreamnow.org/embed-$sId.html"
                         "Red HD" -> embedUrl = "https://iplayerhls.com/e/$sId"
-                        "Pro HD" -> embedUrl = "https://embedo.co/e/$sId"
-                        "dailymotion" -> embedUrl = "https://www.dailymotion.com/embed/video/$sId"
-                        "youtube" -> embedUrl = "https://www.youtube.com/embed/$sId"
                     }
-
                     if (embedUrl.isNotEmpty()) {
                         servers.put(JSONObject().apply {
                             put("name", sName)
                             put("id", sId)
                             put("embedUrl", embedUrl)
-                            put("hasDirectStream", isDirect)
+                            put("hasDirectStream", false)
                         })
                     }
                 }
-            } catch (e: Exception) {
-                Log.w(TAG, "Error decoding qesen servers: ${e.message}")
-            }
+            } catch (_: Exception) {}
         }
 
         val result = JSONObject().apply {

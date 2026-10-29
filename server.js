@@ -24,6 +24,25 @@ function setCache(key, data, ttlSeconds = 180) {
   cache.set(key, { data, expiry: Date.now() + (ttlSeconds * 1000) });
 }
 
+function extractRealUrl(rawUrl) {
+  if (!rawUrl) return '';
+  if (rawUrl.includes('krmzi.org/episode/')) return rawUrl;
+  
+  const m = rawUrl.match(/[?&](?:url|link|target)=([^&]+)/);
+  if (m) {
+    let val = m[1];
+    try {
+      val = decodeURIComponent(val);
+      if (!val.startsWith('http')) {
+        const decoded = Buffer.from(val, 'base64').toString('utf8');
+        if (decoded.includes('krmzi.org')) return decodeURIComponent(decoded);
+      }
+      if (val.includes('krmzi.org')) return val;
+    } catch(e) {}
+  }
+  return rawUrl;
+}
+
 // HTTP request helper with redirect following
 function fetchHtml(url) {
   return new Promise((resolve, reject) => {
@@ -79,10 +98,10 @@ app.get('/api/episodes', async (req, res) => {
     while ((blockMatch = blockRegex.exec(html)) !== null) {
       const blockHtml = blockMatch[1];
       
-      const linkMatch = blockHtml.match(/<a\s+href="(https:\/\/krmzi\.org\/episode\/[^"]+)"\s+title="([^"]+)"/);
+      const linkMatch = blockHtml.match(/<a\s+href="([^"]+)"\s+title="([^"]+)"/);
       if (!linkMatch) continue;
       
-      const epUrl = linkMatch[1];
+      const epUrl = extractRealUrl(linkMatch[1]);
       const fullTitle = linkMatch[2].replace(/\s*-\s*قرمزي\s*$/, '').trim();
       
       const epNumMatch = blockHtml.match(/<div class="episodeNum">[\s\S]*?<span>(\d+)<\/span>/);
@@ -296,7 +315,7 @@ app.get('/api/episode/detail', async (req, res) => {
     const seriesLinkMatch = html.match(/<a[^>]+href="(https:\/\/krmzi\.org\/series\/[^"]+)"/);
     const seriesUrl = seriesLinkMatch ? seriesLinkMatch[1] : '';
 
-    // Extract servers from post payload
+    // Extract servers from post payload or HTML serversList
     let rawServers = [];
     const qesenMatch = html.match(/href="https:\/\/qesen\.net\/krmzi\?post=([^"]+)"/);
     if (qesenMatch) {
@@ -308,6 +327,18 @@ app.get('/api/episode/detail', async (req, res) => {
         }
       } catch (e) {
         console.error('Failed to parse qesen post JSON:', e);
+      }
+    }
+
+    if (rawServers.length === 0) {
+      const liRegex = /<li[^>]*data-name="([^"]*)"[^>]*data-server="([^"]*)"/g;
+      let lm;
+      while ((lm = liRegex.exec(html)) !== null) {
+        const sName = lm[1];
+        const sId = lm[2];
+        if (sName || sId) {
+          rawServers.push({ name: sName || 'مشغل', id: sId });
+        }
       }
     }
 
