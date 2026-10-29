@@ -29,11 +29,12 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
-
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
 
       - name: Synchronize Web Assets
         run: |
@@ -41,6 +42,8 @@ jobs:
           cp -r public/* android/app/src/main/assets/public/
 
       - name: Build Android APK with Gradle
+        env:
+          ANDROID_HOME: /usr/local/lib/android/sdk
         run: |
           cd android
           gradle assembleRelease --no-daemon --stacktrace || gradle assembleDebug --no-daemon --stacktrace
